@@ -142,16 +142,11 @@ class ForceGrid(Grid):
                        self.acc[i[...,0],i[...,1]+1,:]*(1-offset[...,0,None])*offset[...,1,None] +
                        self.acc[i[...,0]+1,i[...,1],:]*offset[...,0,None]*(1-offset[...,1,None]) +
                        self.acc[i[...,0]+1,i[...,1]+1,:]*offset[...,0,None]*offset[...,1,None] )
-        if self.ndim == 3:            
-            ret[gd] = (self.acc[i[...,0],i[...,1],i[...,2],:]*(1-offset[...,0,None])*(1-offset[...,1,None])*(1-offset[...,2,None]) +
-                       self.acc[i[...,0],i[...,1],i[...,2]+1,:]*(1-offset[...,0,None])*(1-offset[...,1,None])*offset[...,2,None] +
-                       self.acc[i[...,0],i[...,1]+1,i[...,2],:]*(1-offset[...,0,None])*offset[...,1,None]*(1-offset[...,2,None]) +
-                       self.acc[i[...,0],i[...,1]+1,i[...,2]+1,:]*(1-offset[...,0,None])*offset[...,1,None]*offset[...,2,None] + 
-                       self.acc[i[...,0]+1,i[...,1],i[...,2],:]*offset[...,0,None]*(1-offset[...,1,None])*(1-offset[...,2,None]) + 
-                       self.acc[i[...,0]+1,i[...,1],i[...,2]+1,:]*offset[...,0,None]*(1-offset[...,1,None])*offset[...,2,None] + 
-                       self.acc[i[...,0]+1,i[...,1]+1,i[...,2],:]*offset[...,0,None]*offset[...,1,None]*(1-offset[...,2,None]) +
-                       self.acc[i[...,0]+1,i[...,1]+1,i[...,2]+1,:]*offset[...,0,None]*offset[...,1,None]*offset[...,2,None]  )  
-
+        if self.ndim == 3:
+            samples = (positions/self.max).unsqueeze(0).unsqueeze(2).unsqueeze(3)
+            image = self.acc.permute(3,2,1,0)             # change to:      C x W x H x D
+            image = image.unsqueeze(0)                  # change to:  1 x C x W x H x D
+            return torch.nn.functional.grid_sample(image,samples,mode='bilinear').squeeze().t()
         return ret 
       
     def grid_acc(self,positions=None,weights=None,method='nearest'):
