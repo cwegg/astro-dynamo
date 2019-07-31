@@ -14,6 +14,13 @@ class Grid:
         self.dx=(self.max-self.min)/(self.max.new_tensor(n)-1)
         self.ndim=len(self.n)
         self.data=data
+
+    def to(self,device):
+        if self.min.device == device:
+            return self
+        else:
+            gridedges = torch.stack((potential.min,potential.max),dim=1).to(device)
+            return Grid(gridedges=gridedges,n=self.n,data=self.data.to(device))
     
     @property
     def x(self):
@@ -55,6 +62,7 @@ class Grid:
         """Places data from positions onto grid using method='nearest'|'cic'
         where cic=cloud in cell. Returns gridded data and stores it as class attribute
         data"""
+        del self.data
         fi=self.fidx(positions)
         nelements=reduce(lambda x,y:x*y,self.n)
         if method=='nearest':
@@ -105,9 +113,22 @@ class ForceGrid(Grid):
     def __init__(self,gridedges=torch.Tensor((10.,10.,10.)),n=(256,256,256),
                  data=None,smoothing=1.0):
         self.greenfft=None
+        self.pot = None
+        self.acc = None
         self.epsilon=smoothing
         super().__init__(gridedges,n,data)
-    
+
+    def to(self,device):
+        if self.min.device == device:
+            return self
+        else:
+            gridedges = torch.stack((potential.min,potential.max),dim=1).to(device)
+            grid = ForceGrid(gridedges=gridedges,n=self.n,data=self.data.to(device))
+            if grid.acc is not None:
+                grid.acc = self.acc.to(device)
+            return grid
+
+
     @staticmethod
     def smoothing_pot(r,epsilon=1.):
         """Taken from the manual of the Galaxy code by Jerry Sellwood."""
@@ -126,7 +147,7 @@ class ForceGrid(Grid):
         return torch.stack([a[...,0]*b[...,0] - a[...,1]*b[...,1],
                             a[...,0]*b[...,1] + a[...,1]*b[...,0]], dim = -1)
     
-    def get_acc(self,positions):
+    def get_accelerations(self,positions):
         """Linear intepolate the gridded forces to the specified positions. This should be preceeded
         by a cool to grid_acc to (re)compute the accelerations on the grid."""
         fi=self.fidx(positions)
@@ -149,7 +170,7 @@ class ForceGrid(Grid):
             return torch.nn.functional.grid_sample(image,samples,mode='bilinear').squeeze().t()
         return ret 
       
-    def grid_acc(self,positions=None,weights=None,method='nearest'):
+    def grid_accelerations(self,positions=None,weights=None,method='nearest'):
         """Takes the brute force approach of removing periodic images by grid doubling in every dimension
         returns (pot, acc, greenfft) greenfft can be repassed and reused on the next call"""
         if positions is not None:
@@ -160,7 +181,7 @@ class ForceGrid(Grid):
         #Treat each case of different dimensions seperately since theres at most 3 in the real world
         if self.ndim == 1:
             nx=rho.shape[0]
-            padrho[0:rho.shape[0]]=rho
+            padrho[0:nx]=rho
             rhofft = torch.rfft(padrho,1,onesided=True)
             if self.greenfft is None or rhofft.shape != self.greenfft.shape:
                 x=torch.arange(-nx,nx,dtype=rhofft.dtype,device=rhofft.device)*self.dx[0]
@@ -185,16 +206,18 @@ class ForceGrid(Grid):
         if self.ndim == 3:
             nx,ny,nz=rho.shape[0],rho.shape[1],rho.shape[2]
             padrho[0:nx,0:ny,0:nz] = rho
-            if self.greenfft is None or rhofft.shape != self.greenfft.shape:
+            if self.greenfft is None or padrho.shape != self.greenfft.shape[:-1]:
                 x=torch.arange(-nx,nx,dtype=rho.dtype,device=rho.device)*self.dx[0]
                 y=torch.arange(-ny,ny,dtype=rho.dtype,device=rho.device)*self.dx[1]
                 z=torch.arange(-nz,nz,dtype=rho.dtype,device=rho.device)*self.dx[2]
                 self.greenfft=torch.rfft(ForceGrid.smoothing_pot(
                     x[:,None,None]**2 + y[None,:,None]**2 + z[None,None,:]**2,epsilon=self.epsilon),
                                          3,onesided=False)
-                
-            self.pot=torch.irfft(ForceGrid.complex_mul(torch.rfft(padrho,3,onesided=False),self.greenfft),3,onesided=False)
+            rhofft=torch.rfft(padrho,3,onesided=False)
             del padrho
+            rhofft = ForceGrid.complex_mul(rhofft,self.greenfft)
+            self.pot=torch.irfft(rhofft,3,onesided=False)
+            del rhofft
             self.pot=self.pot[nx:,ny:,nz:]
             
         self.acc=self.pot.new_zeros(self.pot.shape+(self.ndim,))
