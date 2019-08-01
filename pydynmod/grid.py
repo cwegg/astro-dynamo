@@ -19,7 +19,7 @@ class Grid:
         if self.min.device == device:
             return self
         else:
-            gridedges = torch.stack((potential.min,potential.max),dim=1).to(device)
+            gridedges = torch.stack((self.min,self.max),dim=1).to(device)
             return Grid(gridedges=gridedges,n=self.n,data=self.data.to(device))
     
     @property
@@ -122,9 +122,9 @@ class ForceGrid(Grid):
         if self.min.device == device:
             return self
         else:
-            gridedges = torch.stack((potential.min,potential.max),dim=1).to(device)
+            gridedges = torch.stack((self.min,self.max),dim=1).to(device)
             grid = ForceGrid(gridedges=gridedges,n=self.n,data=self.data.to(device))
-            if grid.acc is not None:
+            if self.acc is not None:
                 grid.acc = self.acc.to(device)
             return grid
 

@@ -44,6 +44,7 @@ class SnapShot:
         self.omega = ensuretensor(omega)
         self.n = len(self.masses)
         self.dt = None
+        self.__organise()
 
     def to(self,device):
         """Moves the snapshot to the specified device. If already on the device returns self, otherwise returns a new
@@ -58,7 +59,7 @@ class SnapShot:
                    time = self.time.to(device), omega=self.omega.to(device))
             if self.dt is not None:
                 newsnap = self.dt.to(device)
-        return
+            return newsnap
         
     @property
     def particletype(self):
@@ -139,7 +140,7 @@ class SnapShot:
         if time==self.time:
             return
         if self.dt is None:
-            self.dt = masses.new_full(time)
+            self.dt = torch.full_like(self.masses,time)
         #Given each particles dt then compute the optimal number of steps rounded up to the nearest 2**N
         steps = 2**(((time-self.time)/self.dt).abs().log2().ceil()).clamp(min=0).type(torch.int32)
         maxsteps = 2**(((time-self.time)/mindt).abs().log2().ceil()).clamp(min=0).type(torch.int32)
@@ -155,20 +156,29 @@ class SnapShot:
             velocities = self.velocities[i,:]
             dt = self.dt[i]
             positions += velocities*thisdt*0.5
+            timenow = self.time + thisdt*0.5
             for step in range(thissteps):
-
-                accelerations = potential.get_accelerations(positions)
+                accelerations = potential.get_accelerations(self.CoRotatingFrame(self.omega,timenow-self.time,positions)) #Get accelerations in from corotating frame
+                self.CoRotatingFrame(-self.omega,timenow-self.time,accelerations,inplace=True) #Move accelerations to inertial frame
                 velocities -= accelerations*thisdt
                 tau = 2*math.pi*((positions.norm(dim=-1)+1e-3)/accelerations.norm(dim=-1)).sqrt()/stepsperorbit
                 dt = torch.min(dt,tau)
                 positions += velocities*thisdt
+                timenow += thisdt
             positions -= velocities*thisdt*0.5
             if thissteps<maxsteps:
-                steps[i.nonzero()[dt<thisdt]]*=2
-            self.positions[i,:] = positions
-            self.velocities[i,:] = velocities
+                steps[i.nonzero()[:,0][dt<thisdt]]*=2
+                gd = i.nonzero()[:,0][dt>=thisdt]
+                if len(gd)>0:
+                    self.positions[gd,:] = positions[dt>=thisdt]
+                    self.velocities[gd,:] = velocities[dt>=thisdt]
+            else:
+                self.positions[i,:] = positions
+                self.velocities[i,:] = velocities
+
             self.dt[i] = dt
             thissteps*=2
+        self.CoRotatingFrame(self.omega,time-self.time,self.positions,self.velocities,inplace=True)
             
         self.time = time
         
@@ -184,8 +194,8 @@ class SnapShot:
             corotpositions[...,2] = positions[...,2]
 
         phase = ensuretensor(omega*time)
-        R = torch.tensor((( torch.cos(phase),torch.sin(phase)),
-                          (-torch.sin(phase),torch.cos(phase))),
+        R = torch.tensor(((torch.cos(phase),-torch.sin(phase)),
+                          (torch.sin(phase),torch.cos(phase))),
                            dtype=positions.dtype,
                            device=positions.device)
 
@@ -198,5 +208,5 @@ class SnapShot:
             else:
                 corotvelocities = torch.zeros_like(velocities)
                 corotvelocities[...,2] = velocities[...,2]
-            corotvelocities[...,0:2] = (R @ positions[...,0:2,None])[...,0]
+            corotvelocities[...,0:2] = (R @ velocities[...,0:2,None])[...,0]
             return corotpositions, corotvelocities
