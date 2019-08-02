@@ -15,23 +15,15 @@ class ParticleType(IntFlag):
     Baryonic = 6
 
 
-def ensuretensor(x, dtype=float_dtype):
-    if isinstance(x, torch.Tensor):
-        return x
-    else:
-        return torch.tensor(x, dtype=dtype)
-
-
 class SnapShot:
     def __init__(self, file=None, positions=None, velocities=None,
                  masses=None, particletype=None, time=0., omega=0.):
-        super(SnapShot, self).__init__()
         if file is None and (positions is None or velocities is None or masses is None):
             raise TypeError('Need either a snapshot to load, or positions, velocities and masses.')
         if positions is not None:
-            self.positions = ensuretensor(positions)
-            self.velocities = ensuretensor(velocities)
-            self.masses = ensuretensor(masses)
+            self.positions = torch.as_tensor(positions)
+            self.velocities = torch.as_tensor(velocities)
+            self.masses = torch.as_tensor(masses)
         if file is not None:
             snap = torch.tensor(np.loadtxt(file), dtype=float_dtype)
             self.positions = snap[:, 0:3]
@@ -46,7 +38,9 @@ class SnapShot:
         self.omega = ensuretensor(omega)
         self.n = len(self.masses)
         self.dt = None
-        self.__organise()
+        self.starrange=None
+        self.dmrange=None
+        self.gasrange=None
 
     def to(self, device):
         """Moves the snapshot to the specified device. If already on the device returns self, otherwise returns a new
@@ -59,6 +53,9 @@ class SnapShot:
                                masses=self.masses.to(device),
                                particletype=self.particletype.to(device),
                                time=self.time.to(device), omega=self.omega.to(device))
+            newsnap.dmrange=self.dmrange
+            newsnap.starrange=self.starrange
+            newsnap.gasrange=self.gasrange
             if self.dt is not None:
                 newsnap = self.dt.to(device)
             return newsnap
@@ -85,14 +82,20 @@ class SnapShot:
 
     @property
     def dm(self):
+        if self.dmrange is None:
+            self.__organise()
         return self[self.dmrange[0]:self.dmrange[1]]
 
     @property
     def gas(self):
+        if self.gasrange is None:
+            self.__organise()
         return self[self.gasrange[0]:self.gasrange[1]]
 
     @property
     def stars(self):
+        if self.starrange is None:
+            self.__organise()
         return self[self.starrange[0]:self.starrange[1]]
 
     @property
@@ -145,7 +148,15 @@ class SnapShot:
         return newsnap
 
     def integrate(self, time, potential, mindt=1e-6, stepsperorbit=800, verbose=False):
-        """"We integrate in the inertial frame, but store the particles back to the corotating frame at the """
+        """"Integrate the snapshot until time t. Use a minimum timestep of mindt (default 1e-6) and aim for
+        stepsperorbit (default 800) steps per orbit.
+
+        Strategy is to estimate for each particle the required number of steps rounded up to the nearest 2**N and
+        integrate each group of particles with same number of timesteps together. If we find a particle that had
+        an acceleration such that we arent getting enough steps per orbit we double the number of steps and retry.
+        The timestep for each particle is remembered between calls.
+
+        Note that we integrate in the inertial frame, but store the particles back to the corotating frame at the end. """
         if time == self.time:
             return
         if self.dt is None:
@@ -197,8 +208,8 @@ class SnapShot:
 
     @classmethod
     def corotating_frame(cls, omega, time, positions, velocities=None, inplace=False):
-        """Returns positions, velocities in the corotating frame.
-        Uses the time to rotate positions (and optionally velocities) from the rotating to the corotating frame."""
+        """Uses the time to rotate positions (and optionally velocities) from the rotating to the corotating frame.
+        Returns positions, velocities in the corotating frame. Optionally updates the positions and velocities inplace"""
         if inplace:
             corotating_positions = positions
         else:
@@ -220,5 +231,5 @@ class SnapShot:
             else:
                 corotating_velocities = torch.zeros_like(velocities)
                 corotating_velocities[..., 2] = velocities[..., 2]
-                corotating_velocities[..., 0:2] = (R @ velocities[..., 0:2, None])[..., 0]
+            corotating_velocities[..., 0:2] = (R @ velocities[..., 0:2, None])[..., 0]
             return corotating_positions, corotating_velocities
