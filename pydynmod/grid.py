@@ -22,7 +22,11 @@ class Grid:
             return self
         else:
             gridedges = torch.stack((self.min, self.max), dim=1).to(device)
-            return Grid(gridedges=gridedges, n=self.n, data=self.data.to(device))
+            if self.data is not None:
+                data=self.data.to(device)
+            else:
+                data=None
+            return Grid(gridedges=gridedges, n=self.n, data=data)
 
     @property
     def x(self):
@@ -59,11 +63,20 @@ class Grid:
             i1d = i1d * self.n[2] + i[:, 2]
         return i1d
 
+    def griddata_sparse(self, positions, weights=None):
+        gd = self.ingrid(positions)
+        fi = self.fidx(positions)
+        i = (fi + 0.5).type(torch.int64)
+        i = i[gd].t()
+        w = weights[gd]
+        self.data = torch.sparse.FloatTensor(i,w,size=self.n).to_dense()
+        return self.data
+
+
     def griddata(self, positions, weights=None, method='nearest'):
         """Places data from positions onto grid using method='nearest'|'cic'
         where cic=cloud in cell. Returns gridded data and stores it as class attribute
         data"""
-        del self.data
         fi = self.fidx(positions)
         nelements = reduce(lambda x, y: x * y, self.n)
         if method == 'nearest':
@@ -78,8 +91,15 @@ class Grid:
             i = (fi + 0.5).type(torch.int64)
             if weights is not None:
                 weights = weights[gd]
-            self.data = torch.bincount(self.__nd_to_1d(i[gd]), minlength=nelements, weights=weights).type(
-                dtype=positions.dtype)
+
+            #bincount is fast but doesnt support autodiff
+            if weights is not None and weights.requires_grad:
+                self.data = torch.sparse.FloatTensor(i[gd].t(), weights, size=self.n).to_dense().type(
+                    dtype=positions.dtype)
+            else:
+                self.data = torch.bincount(self.__nd_to_1d(i[gd]), minlength=nelements, weights=weights).type(
+                    dtype=positions.dtype)
+
 
         if method == 'cic':
             i = fi[gd, ...].floor()
@@ -213,7 +233,7 @@ class ForceGrid(Grid):
                 y = torch.arange(-ny, ny, dtype=rho.dtype, device=rho.device) * self.dx[1]
                 z = torch.arange(-nz, nz, dtype=rho.dtype, device=rho.device) * self.dx[2]
                 self.greenfft = torch.rfft(ForceGrid.smoothing_pot(
-                    x[:, None, None] ** 2 + y[None, :, None] ** 2 + z[None, None, :] ** 2, epsilon=self.epsilon),
+                    (x[:, None, None] ** 2 + y[None, :, None] ** 2 + z[None, None, :] ** 2).sqrt(), epsilon=self.epsilon),
                     3, onesided=False)
             rhofft = torch.rfft(padrho, 3, onesided=False)
             del padrho
