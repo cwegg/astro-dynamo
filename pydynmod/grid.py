@@ -23,9 +23,9 @@ class Grid:
         else:
             gridedges = torch.stack((self.min, self.max), dim=1).to(device)
             if self.data is not None:
-                data=self.data.to(device)
+                data = self.data.to(device)
             else:
-                data=None
+                data = None
             return Grid(gridedges=gridedges, n=self.n, data=data)
 
     @property
@@ -69,11 +69,10 @@ class Grid:
         i = (fi + 0.5).type(torch.int64)
         i = i[gd].t()
         w = weights[gd]
-        self.data = torch.sparse.FloatTensor(i,w,size=self.n).to_dense()
+        self.data = torch.sparse.FloatTensor(i, w, size=self.n).to_dense()
         return self.data
 
-
-    def griddata(self, positions, weights=None, method='nearest',fractional_update=1):
+    def griddata(self, positions, weights=None, method='nearest', fractional_update=1):
         """Places data from positions onto grid using method='nearest'|'cic'
         where cic=cloud in cell. Returns gridded data and stores it as class attribute
         data"""
@@ -87,7 +86,7 @@ class Grid:
             if fractional_update == 1:
                 self.data = positions.new_zeros(nelements)
             else:
-                self.data.lerp_(positions.new_zeros(nelements),fractional_update)
+                self.data.lerp_(positions.new_zeros(nelements), fractional_update)
             return self.data
 
         if method == 'nearest':
@@ -95,17 +94,23 @@ class Grid:
             if weights is not None:
                 weights = weights[gd]
 
-            #bincount is fast but doesnt support autodiff
+            # bincount is fast but doesnt support autodiff
             if weights is not None and weights.requires_grad:
                 if fractional_update == 1:
-                    self.data = torch.sparse.FloatTensor(i[gd].t(), weights, size=self.n).to_dense().reshape(self.n).type(dtype=positions.dtype)
+                    self.data = torch.sparse.FloatTensor(i[gd].t(), weights, size=self.n).to_dense().reshape(
+                        self.n).type(dtype=positions.dtype)
                 else:
-                    self.data.lerp_(torch.sparse.FloatTensor(i[gd].t(), weights, size=self.n).to_dense().reshape(self.n).type(dtype=positions.dtype),fractional_update)
+                    self.data.lerp_(
+                        torch.sparse.FloatTensor(i[gd].t(), weights, size=self.n).to_dense().reshape(self.n).type(
+                            dtype=positions.dtype), fractional_update)
             else:
                 if fractional_update == 1:
-                    self.data = torch.bincount(self.nd_to_1d(i[gd]), minlength=nelements, weights=weights).reshape(self.n).type(dtype=positions.dtype)
+                    self.data = torch.bincount(self.nd_to_1d(i[gd]), minlength=nelements, weights=weights).reshape(
+                        self.n).type(dtype=positions.dtype)
                 else:
-                    self.data.lerp_(torch.bincount(self.nd_to_1d(i[gd]), minlength=nelements, weights=weights).reshape(self.n).type(dtype=positions.dtype), fractional_update)
+                    self.data.lerp_(
+                        torch.bincount(self.nd_to_1d(i[gd]), minlength=nelements, weights=weights).reshape(self.n).type(
+                            dtype=positions.dtype), fractional_update)
 
         if method == 'cic':
             i = fi[gd, ...].floor()
@@ -177,7 +182,7 @@ class ForceGrid(Grid):
     def get_accelerations(self, positions):
         """Linear intepolate the gridded forces to the specified positions. This should be preceeded
         by a cool to grid_acc to (re)compute the accelerations on the grid."""
-        if self.ndim <3:
+        if self.ndim < 3:
             fi = self.fidx(positions)
             gd = self.ingrid(positions)
             i = fi[gd, ...].floor()
@@ -241,7 +246,8 @@ class ForceGrid(Grid):
                 y = torch.arange(-ny, ny, dtype=rho.dtype, device=rho.device) * self.dx[1]
                 z = torch.arange(-nz, nz, dtype=rho.dtype, device=rho.device) * self.dx[2]
                 self.greenfft = torch.rfft(ForceGrid.smoothing_pot(
-                    (x[:, None, None] ** 2 + y[None, :, None] ** 2 + z[None, None, :] ** 2).sqrt(), epsilon=self.epsilon),
+                    (x[:, None, None] ** 2 + y[None, :, None] ** 2 + z[None, None, :] ** 2).sqrt(),
+                    epsilon=self.epsilon),
                     3, onesided=False)
             rhofft = torch.rfft(padrho, 3, onesided=False)
             del padrho
