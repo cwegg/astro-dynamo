@@ -2,6 +2,7 @@ import torch
 import math
 import numpy as np
 from enum import IntFlag
+from torch.utils.data import WeightedRandomSampler
 
 float_dtype = torch.float32
 
@@ -34,13 +35,13 @@ class SnapShot:
         if particletype is None:
             particletype = torch.full(self.masses.shape, ParticleType.Star, dtype=torch.uint8)
         self.__particletype = particletype
-        self.time = ensuretensor(time)
-        self.omega = ensuretensor(omega)
+        self.time = torch.as_tensor(time)
+        self.omega = torch.as_tensor(omega)
         self.n = len(self.masses)
         self.dt = None
-        self.starrange=None
-        self.dmrange=None
-        self.gasrange=None
+        self.starrange = None
+        self.dmrange = None
+        self.gasrange = None
 
     def to(self, device):
         """Moves the snapshot to the specified device. If already on the device returns self, otherwise returns a new
@@ -53,9 +54,9 @@ class SnapShot:
                                masses=self.masses.to(device),
                                particletype=self.particletype.to(device),
                                time=self.time.to(device), omega=self.omega.to(device))
-            newsnap.dmrange=self.dmrange
-            newsnap.starrange=self.starrange
-            newsnap.gasrange=self.gasrange
+            newsnap.dmrange = self.dmrange
+            newsnap.starrange = self.starrange
+            newsnap.gasrange = self.gasrange
             if self.dt is not None:
                 newsnap = self.dt.to(device)
             return newsnap
@@ -147,64 +148,98 @@ class SnapShot:
             newsnap.dt = self.dt[i]
         return newsnap
 
-    def integrate(self, time, potential, mindt=1e-6, stepsperorbit=800, verbose=False):
-        """"Integrate the snapshot until time t. Use a minimum timestep of mindt (default 1e-6) and aim for
+    def integrate(self, time, potential, minsteps=1, maxsteps=2 ** 20, stepsperorbit=800, verbose=False):
+        """"
+        Integrate the snapshot until time. Use a minimum timestep of mindt (default 1e-6) and aim for
         stepsperorbit (default 800) steps per orbit.
+
+        time may be either a scalar, in which case we integrate from self.time
+        to time, or a tensor of times for each particle, in which case we integrate particle i from 0 to time[i].
 
         Strategy is to estimate for each particle the required number of steps rounded up to the nearest 2**N and
         integrate each group of particles with same number of timesteps together. If we find a particle that had
         an acceleration such that we arent getting enough steps per orbit we double the number of steps and retry.
         The timestep for each particle is remembered between calls.
 
-        Note that we integrate in the inertial frame, but store the particles back to the corotating frame at the end. """
-        if time == self.time:
+        Note that we integrate in the inertial frame, but store the particles back to the corotating frame at the end.
+        """
+
+        time = torch.as_tensor(time)
+        if time.nelement() == 1:
+            blockstep = True
+            initial_time = self.time
+        else:
+            assert (len(time) == self.n)
+            blockstep = False
+            initial_time = 0
+
+        if blockstep and time == self.time:
             return
+
         if self.dt is None:
-            self.dt = torch.full_like(self.masses, time)
-        # Given each particles dt then compute the optimal number of steps rounded up to the nearest 2**N
-        steps = 2 ** (((time - self.time) / self.dt).abs().log2().ceil()).clamp(min=0).type(torch.int32)
-        maxsteps = 2 ** (((time - self.time) / mindt).abs().log2().ceil()).clamp(min=0).type(torch.int32)
-        steps = steps.clamp(1, maxsteps)  # dont exceed mindt stepsize, and make at least 1 step
-
-        thissteps = steps.min()
-        while thissteps <= steps.max():
-            thisdt = (time - self.time) / thissteps
-            i = (thissteps == steps)
-            if verbose:
-                print(thissteps, maxsteps, thisdt, i.sum())
-            positions = self.positions[i, :]
-            velocities = self.velocities[i, :]
-            dt = self.dt[i]
-            positions += velocities * thisdt * 0.5
-            timenow = self.time + thisdt * 0.5
-            for step in range(thissteps):
-                # Get accelerations in from corotating frame
-                accelerations = potential.get_accelerations(self.corotating_frame(self.omega, timenow - self.time,
-                                                                                  positions))
-                self.corotating_frame(-self.omega, timenow - self.time, accelerations,
-                                      inplace=True)  # Move accelerations to inertial frame
-                velocities -= accelerations * thisdt
-                tau = 2 * math.pi * (
-                            (positions.norm(dim=-1) + 1e-3) / accelerations.norm(dim=-1)).sqrt() / stepsperorbit
-                dt = torch.min(dt, tau)
-                positions += velocities * thisdt
-                timenow += thisdt
-            positions -= velocities * thisdt * 0.5
-            if thissteps < maxsteps:
-                steps[i.nonzero()[:, 0][dt < thisdt]] *= 2
-                gd = i.nonzero()[:, 0][dt >= thisdt]
-                if len(gd) > 0:
-                    self.positions[gd, :] = positions[dt >= thisdt]
-                    self.velocities[gd, :] = velocities[dt >= thisdt]
+            if blockstep:
+                self.dt = torch.full_like(self.masses, time - initial_time)
             else:
-                self.positions[i, :] = positions
-                self.velocities[i, :] = velocities
+                self.dt = time.clone()
 
-            self.dt[i] = dt
+        # Given each particles dt then compute the optimal number of steps rounded up to the nearest 2**N
+        steps = 2 ** (((time - initial_time) / self.dt).abs().log2().ceil()).clamp(min=0).type(torch.int32)
+        # maxsteps = 2 ** (((time - initial_time) / mindt).abs().log2().ceil()).clamp(min=0).type(torch.int32)
+        steps = steps.clamp(minsteps, maxsteps)  # dont exceed mindt stepsize, and make at least 1 step
+
+        if not blockstep:
+            steps.masked_fill_(time == initial_time, 0)
+
+        thissteps = steps.min().clamp(1, None)
+        while thissteps <= steps.max():
+            i = (thissteps == steps)
+            n_particles = i.sum()
+            if n_particles > 0:
+                positions = self.positions[i, :]
+                velocities = self.velocities[i, :]
+                dt = self.dt[i]
+                if blockstep:
+                    thisdt = (time - initial_time).view(1) / thissteps
+                else:
+                    thisdt = (time[i] - initial_time) / thissteps
+
+                if verbose:
+                    print(f'Steps: {thissteps} (of max {maxsteps}) with {i.sum()} particles')
+
+                positions += velocities * thisdt[:, None] * 0.5
+                timenow = initial_time + thisdt * 0.5
+                for step in range(thissteps):
+                    # Get accelerations in from corotating frame
+                    accelerations = potential.get_accelerations(
+                        self.corotating_frame(self.omega, timenow - initial_time,
+                                              positions))
+                    self.corotating_frame(-self.omega, timenow - initial_time, accelerations,
+                                          inplace=True)  # Move accelerations to inertial frame
+                    velocities -= accelerations * thisdt[:, None]
+                    tau = 2 * math.pi * (
+                            (positions.norm(dim=-1) + 1e-3) / (
+                            accelerations.norm(dim=-1) + 1e-5)).sqrt() / stepsperorbit
+                    dt = torch.min(dt, tau)
+                    positions += velocities * thisdt[:, None]
+                    timenow += thisdt
+                positions -= velocities * thisdt[:, None] * 0.5
+                if thissteps < maxsteps:
+                    steps[i.nonzero()[:, 0][dt < thisdt]] *= 2
+                    gd = i.nonzero()[:, 0][dt >= thisdt]
+                    if len(gd) > 0:
+                        self.positions[gd, :] = positions[dt >= thisdt]
+                        self.velocities[gd, :] = velocities[dt >= thisdt]
+                        self.dt[gd] = dt[dt >= thisdt]
+                else:
+                    self.positions[i, :] = positions
+                    self.velocities[i, :] = velocities
+
             thissteps *= 2
-        self.corotating_frame(self.omega, time - self.time, self.positions, self.velocities, inplace=True)
 
-        self.time = time
+        self.corotating_frame(self.omega, time - initial_time, self.positions, self.velocities, inplace=True)
+
+        if blockstep:
+            self.time = time
 
     @classmethod
     def corotating_frame(cls, omega, time, positions, velocities=None, inplace=False):
@@ -216,12 +251,9 @@ class SnapShot:
             corotating_positions = torch.zeros_like(positions)
             corotating_positions[..., 2] = positions[..., 2]
 
-        phase = ensuretensor(omega * time)
-        R = torch.tensor(((torch.cos(phase), -torch.sin(phase)),
-                          (torch.sin(phase), torch.cos(phase))),
-                         dtype=positions.dtype,
-                         device=positions.device)
-
+        phase = torch.as_tensor(omega * time)
+        cp, sp = torch.cos(phase), torch.sin(phase)
+        R = torch.stack((cp, -sp, sp, cp)).view(2, 2, len(cp)).permute(2, 0, 1)
         corotating_positions[..., 0:2] = (R @ positions[..., 0:2, None])[..., 0]
         if velocities is None:
             return corotating_positions
@@ -233,3 +265,41 @@ class SnapShot:
                 corotating_velocities[..., 2] = velocities[..., 2]
             corotating_velocities[..., 0:2] = (R @ velocities[..., 0:2, None])[..., 0]
             return corotating_positions, corotating_velocities
+
+    def resample(self, potential, verbose=False, velocity_perturbation=0.01):
+
+        gd = potential.ingrid(self.positions).nonzero()[:, 0]
+        i = torch.multinomial(self.masses[gd], self.n, replacement=True).sort().values
+
+        # copy the resampled positions - the first copy of each particle is the parent particle and will
+        # remain unchanged
+        self.positions.copy_(self.positions[gd[i], :])
+        self.velocities.copy_(self.velocities[gd[i], :])
+        self.masses.fill_(self.masses[gd].sum() / self.n)
+        self.dt.fill_(1.0)
+
+        accelerations = potential.get_accelerations(self.positions)
+        tau = 2 * math.pi * ((self.positions.norm(dim=-1) + 1e-3) / (accelerations.norm(dim=-1) + 1e-5)).sqrt()
+        # compute the sample time for each child particle
+        sample_time = torch.zeros_like(self.masses)
+        uniq_i, inverse_indices, counts = torch.unique_consecutive(i, return_counts=True, return_inverse=True)
+        for n_children in range(2, counts.max() + 1):
+            number_of_n_children = (counts == n_children).sum()
+            if number_of_n_children > 0:
+                if verbose:
+                    print('n_children', n_children, 'number_of_n_children:', number_of_n_children)
+                sample_time[(counts[inverse_indices] == n_children).nonzero()[:, 0]] = torch.arange(n_children,
+                                                                                                    dtype=sample_time.dtype,
+                                                                                                    device=sample_time.device).repeat(
+                    number_of_n_children) / n_children
+        sample_time *= tau
+        self.integrate(sample_time, potential, minsteps=1024, maxsteps=8192, verbose=verbose)
+
+        # perturb the velocities of the children in the rotating frame
+        children = (sample_time > 0)
+        self.velocities[children, 0] += velocity_perturbation * torch.randn_like(self.velocities[children, 0]) * (
+                self.velocities[children, 0] - self.omega * self.positions[children, 1])
+        self.velocities[children, 1] += velocity_perturbation * torch.randn_like(self.velocities[children, 1]) * (
+                self.velocities[children, 1] + self.omega * self.positions[children, 0])
+        self.velocities[children, 2] += velocity_perturbation * torch.randn_like(self.velocities[children, 2]) * \
+                                        self.velocities[children, 2]
