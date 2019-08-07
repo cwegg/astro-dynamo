@@ -55,7 +55,7 @@ class Grid:
     def fidx(self, positions):
         return (positions - self.min[None, :]) / self.dx
 
-    def __nd_to_1d(self, i):
+    def nd_to_1d(self, i):
         i1d = i[:, 0]
         if self.ndim >= 2:
             i1d = i1d * self.n[1] + i[:, 1]
@@ -73,7 +73,7 @@ class Grid:
         return self.data
 
 
-    def griddata(self, positions, weights=None, method='nearest'):
+    def griddata(self, positions, weights=None, method='nearest',fractional_update=1):
         """Places data from positions onto grid using method='nearest'|'cic'
         where cic=cloud in cell. Returns gridded data and stores it as class attribute
         data"""
@@ -84,7 +84,10 @@ class Grid:
         else:
             gd = self.ingrid(positions, h=0.5)
         if gd.sum() == 0:
-            self.data = positions.new_zeros(nelements)
+            if fractional_update == 1:
+                self.data = positions.new_zeros(nelements)
+            else:
+                self.data.lerp_(positions.new_zeros(nelements),fractional_update)
             return self.data
 
         if method == 'nearest':
@@ -94,12 +97,15 @@ class Grid:
 
             #bincount is fast but doesnt support autodiff
             if weights is not None and weights.requires_grad:
-                self.data = torch.sparse.FloatTensor(i[gd].t(), weights, size=self.n).to_dense().type(
-                    dtype=positions.dtype)
+                if fractional_update == 1:
+                    self.data = torch.sparse.FloatTensor(i[gd].t(), weights, size=self.n).to_dense().reshape(self.n).type(dtype=positions.dtype)
+                else:
+                    self.data.lerp_(torch.sparse.FloatTensor(i[gd].t(), weights, size=self.n).to_dense().reshape(self.n).type(dtype=positions.dtype),fractional_update)
             else:
-                self.data = torch.bincount(self.__nd_to_1d(i[gd]), minlength=nelements, weights=weights).type(
-                    dtype=positions.dtype)
-
+                if fractional_update == 1:
+                    self.data = torch.bincount(self.nd_to_1d(i[gd]), minlength=nelements, weights=weights).reshape(self.n).type(dtype=positions.dtype)
+                else:
+                    self.data.lerp_(torch.bincount(self.nd_to_1d(i[gd]), minlength=nelements, weights=weights).reshape(self.n).type(dtype=positions.dtype), fractional_update)
 
         if method == 'cic':
             i = fi[gd, ...].floor()
@@ -111,9 +117,9 @@ class Grid:
                 weights = weights[gd]
             self.data = weights.new_zeros(nelements)
             if len(self.n) == 1:
-                self.data += torch.bincount(self.__nd_to_1d(i), minlength=nelements,
+                self.data += torch.bincount(self.nd_to_1d(i), minlength=nelements,
                                             weights=weights * (1 - offset))
-                self.data += torch.bincount(self.__nd_to_1d(i + 1), minlength=nelements,
+                self.data += torch.bincount(self.nd_to_1d(i + 1), minlength=nelements,
                                             weights=weights * offset)
             else:
                 twidle = torch.tensor([0, 1])
@@ -125,9 +131,9 @@ class Grid:
                             thisweights *= (1 - offset[..., dimi])
                         if offsetdim == 1:
                             thisweights *= offset[..., dimi]
-                    self.data += torch.bincount(self.__nd_to_1d(i + offsetdims), minlength=nelements,
+                    self.data += torch.bincount(self.nd_to_1d(i + offsetdims), minlength=nelements,
                                                 weights=thisweights * weights)
-        self.data = self.data.reshape(self.n)
+            self.data = self.data.reshape(self.n)
         return self.data
 
 
@@ -171,25 +177,27 @@ class ForceGrid(Grid):
     def get_accelerations(self, positions):
         """Linear intepolate the gridded forces to the specified positions. This should be preceeded
         by a cool to grid_acc to (re)compute the accelerations on the grid."""
-        fi = self.fidx(positions)
-        gd = self.ingrid(positions)
-        i = fi[gd, ...].floor()
-        offset = fi[gd, ...] - i
-        i = i.type(torch.int64)
-        ret = positions.new_zeros(positions.shape[0:-1] + (self.ndim,))
-        if self.ndim == 1:
-            ret[gd] = self.acc[i, :] * (1 - offset[..., 0]) + self.acc[i + 1, :] * offset[..., 0]
-        if self.ndim == 2:
-            ret[gd] = (self.acc[i[..., 0], i[..., 1], :] * (1 - offset[..., 0, None]) * (1 - offset[..., 1, None]) +
-                       self.acc[i[..., 0], i[..., 1] + 1, :] * (1 - offset[..., 0, None]) * offset[..., 1, None] +
-                       self.acc[i[..., 0] + 1, i[..., 1], :] * offset[..., 0, None] * (1 - offset[..., 1, None]) +
-                       self.acc[i[..., 0] + 1, i[..., 1] + 1, :] * offset[..., 0, None] * offset[..., 1, None])
+        if self.ndim <3:
+            fi = self.fidx(positions)
+            gd = self.ingrid(positions)
+            i = fi[gd, ...].floor()
+            offset = fi[gd, ...] - i
+            i = i.type(torch.int64)
+            ret = positions.new_zeros(positions.shape[0:-1] + (self.ndim,))
+            if self.ndim == 1:
+                ret[gd] = self.acc[i, :] * (1 - offset[..., 0]) + self.acc[i + 1, :] * offset[..., 0]
+            if self.ndim == 2:
+                ret[gd] = (self.acc[i[..., 0], i[..., 1], :] * (1 - offset[..., 0, None]) * (1 - offset[..., 1, None]) +
+                           self.acc[i[..., 0], i[..., 1] + 1, :] * (1 - offset[..., 0, None]) * offset[..., 1, None] +
+                           self.acc[i[..., 0] + 1, i[..., 1], :] * offset[..., 0, None] * (1 - offset[..., 1, None]) +
+                           self.acc[i[..., 0] + 1, i[..., 1] + 1, :] * offset[..., 0, None] * offset[..., 1, None])
+                return ret
+
         if self.ndim == 3:
             samples = (positions / self.max).unsqueeze(0).unsqueeze(2).unsqueeze(3)
             image = self.acc.permute(3, 2, 1, 0)  # change to:      C x W x H x D
             image = image.unsqueeze(0)  # change to:  1 x C x W x H x D
             return torch.nn.functional.grid_sample(image, samples, mode='bilinear').squeeze().t()
-        return ret
 
     def grid_accelerations(self, positions=None, weights=None, method='nearest'):
         """Takes the brute force approach of removing periodic images by grid doubling in every dimension
