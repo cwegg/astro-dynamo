@@ -1,0 +1,4 @@
+['remote "s3remote"']
+url = s3://astro-dynamo/astro-dynamo
+[core]
+remote = s3remote
