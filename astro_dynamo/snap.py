@@ -18,7 +18,7 @@ class ParticleType(IntFlag):
 
 class SnapShot:
     def __init__(self, file=None, positions=None, velocities=None,
-                 masses=None, particletype=None, time=0., omega=0.):
+                 masses=None, particletype=None, time=0., omega=0., dt=None):
         if file is None and (positions is None or velocities is None or masses is None):
             raise TypeError('Need either a snapshot to load, or positions, velocities and masses.')
         if positions is not None:
@@ -38,7 +38,9 @@ class SnapShot:
         self.time = torch.as_tensor(time)
         self.omega = torch.as_tensor(omega)
         self.n = len(self.masses)
-        self.dt = None
+        self.dt = dt
+        if self.dt is None:
+            self.dt = torch.full(self.masses.shape, float('inf'), dtype=self.positions.dtype)
         self.starrange = None
         self.dmrange = None
         self.gasrange = None
@@ -53,12 +55,11 @@ class SnapShot:
                                velocities=self.velocities.to(device),
                                masses=self.masses.to(device),
                                particletype=self.particletype.to(device),
+                               dt=self.dt.to(device),
                                time=self.time.to(device), omega=self.omega.to(device))
             newsnap.dmrange = self.dmrange
             newsnap.starrange = self.starrange
             newsnap.gasrange = self.gasrange
-            if self.dt is not None:
-                newsnap = self.dt.to(device)
             return newsnap
 
     @property
@@ -241,6 +242,54 @@ class SnapShot:
         if blockstep:
             self.time = time
 
+    def leapfrog_steps(self, potential, steps, stepsperorbit=800, verbose=False, return_time=False):
+        baddt = (self.dt == float("Inf"))
+        if baddt.sum() > 0:
+            print('Estimating dt')
+            accelerations = potential.get_accelerations(self.positions[baddt, :])
+            self.dt[baddt] = 2 * math.pi * (
+                    (self.positions[baddt, :].norm(dim=-1) + 1e-3) / (
+                    accelerations.norm(dim=-1) + 1e-5)).sqrt() / stepsperorbit
+
+        self.positions += self.velocities * self.dt[:, None] * 0.5
+        timenow = self.dt * 0.5
+        bad = (self.dt < 0)
+        for step in range(steps):
+            # Get accelerations in from corotating frame
+            accelerations = potential.get_accelerations(self.corotating_frame(self.omega, timenow, self.positions))
+            self.corotating_frame(-self.omega, timenow, accelerations,
+                                  inplace=True)  # Move accelerations to inertial frame
+            self.velocities -= accelerations * self.dt[:, None]
+            self.positions += self.velocities * self.dt[:, None]
+            timenow += self.dt
+
+            # Timestep adjustment: for particles where the estimated ideal timestep is too short by 0.75 we wind back to
+            # before the step. Note we don't care exactly what time each particles position is at, and just want
+            # to move roughly steps/stepsperorbit so there's no need to repeat the step
+            # total_acceleration=accelerations.norm(dim=-1)
+            # ideal_dt = 2 * math.pi * (
+            #        (self.positions.norm(dim=-1) + 1e-3) / (
+            #        total_acceleration + 1e-5)).sqrt() / stepsperorbit
+            # idx_bad = (0.5*self.dt>ideal_dt) & (total_acceleration>0)
+            # if idx_bad.sum() > 0:
+            # if idx_bad.sum() > 4000:
+            #    from IPython.core.debugger import set_trace
+            #    set_trace()
+            # wind back operations, and setup for new timestep
+
+            #    self.positions[idx_bad,:] -= self.velocities[idx_bad,:] * self.dt[idx_bad, None]
+            #    self.velocities[idx_bad,:] += accelerations[idx_bad,:] * self.dt[idx_bad, None]
+            #    self.positions[idx_bad,:] -= self.velocities[idx_bad,:] * (self.dt[idx_bad, None]-ideal_dt[idx_bad,None]) * 0.5
+            #    timenow[idx_bad] += 0.5*ideal_dt[idx_bad] - 1.5*self.dt[idx_bad]
+            #    self.dt[idx_bad] = ideal_dt[idx_bad]
+            #    bad[idx_bad] = 1
+        if verbose:
+            print(f'Bad: {idx_bad.sum()} Total Bad seen: {bad.sum()}')
+        self.positions -= self.velocities * self.dt[:, None] * 0.5
+        self.corotating_frame(self.omega, timenow, self.positions, self.velocities, inplace=True)
+        if return_time:
+            return timenow
+
     @classmethod
     def corotating_frame(cls, omega, time, positions, velocities=None, inplace=False):
         """Uses the time to rotate positions (and optionally velocities) from the rotating to the corotating frame.
@@ -276,7 +325,9 @@ class SnapShot:
         self.positions.copy_(self.positions[gd[i], :])
         self.velocities.copy_(self.velocities[gd[i], :])
         self.masses.fill_(self.masses[gd].sum() / self.n)
-        self.dt.fill_(1.0)
+        # self.dt.fill_(1.0)
+        self.dt.copy_(self.dt[gd[i]])
+
 
         accelerations = potential.get_accelerations(self.positions)
         tau = 2 * math.pi * ((self.positions.norm(dim=-1) + 1e-3) / (accelerations.norm(dim=-1) + 1e-5)).sqrt()
@@ -303,3 +354,4 @@ class SnapShot:
                 self.velocities[children, 1] + self.omega * self.positions[children, 0])
         self.velocities[children, 2] += velocity_perturbation * torch.randn_like(self.velocities[children, 2]) * \
                                         self.velocities[children, 2]
+
