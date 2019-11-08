@@ -14,7 +14,6 @@ class Grid:
             self.min = gridedges[..., 0]
             self.max = gridedges[..., 1]
         self.dx = (self.max - self.min) / (self.max.new_tensor(n) - 1)
-        self.ndim = len(self.n)
         self.data = data
 
     def to(self, device):
@@ -55,12 +54,8 @@ class Grid:
     def fidx(self, positions):
         return (positions - self.min[None, :]) / self.dx
 
-    def nd_to_1d(self, i):
-        i1d = i[:, 0]
-        if self.ndim >= 2:
-            i1d = i1d * self.n[1] + i[:, 1]
-        if self.ndim >= 3:
-            i1d = i1d * self.n[2] + i[:, 2]
+    def threed_to_oned(self, i):
+        i1d = (i[:, 0] * self.n[1] + i[:, 1]) * self.n[2] + i[:, 2]
         return i1d
 
     def griddata_sparse(self, positions, weights=None):
@@ -105,11 +100,13 @@ class Grid:
                             dtype=positions.dtype), fractional_update)
             else:
                 if fractional_update == 1:
-                    self.data = torch.bincount(self.nd_to_1d(i[gd]), minlength=nelements, weights=weights).reshape(
+                    self.data = torch.bincount(self.threed_to_oned(i[gd]), minlength=nelements,
+                                               weights=weights).reshape(
                         self.n).type(dtype=positions.dtype)
                 else:
                     self.data.lerp_(
-                        torch.bincount(self.nd_to_1d(i[gd]), minlength=nelements, weights=weights).reshape(self.n).type(
+                        torch.bincount(self.threed_to_oned(i[gd]), minlength=nelements, weights=weights).reshape(
+                            self.n).type(
                             dtype=positions.dtype), fractional_update)
 
         if method == 'cic':
@@ -122,13 +119,13 @@ class Grid:
                 weights = weights[gd]
             self.data = weights.new_zeros(nelements)
             if len(self.n) == 1:
-                self.data += torch.bincount(self.nd_to_1d(i), minlength=nelements,
+                self.data += torch.bincount(self.threed_to_oned(i), minlength=nelements,
                                             weights=weights * (1 - offset))
-                self.data += torch.bincount(self.nd_to_1d(i + 1), minlength=nelements,
+                self.data += torch.bincount(self.threed_to_oned(i + 1), minlength=nelements,
                                             weights=weights * offset)
             else:
                 twidle = torch.tensor([0, 1])
-                indexes = torch.cartesian_prod(*torch.split(twidle.repeat(self.ndim), 2))
+                indexes = torch.cartesian_prod(*torch.split(twidle.repeat(3), 2))
                 for offsetdims in indexes:
                     thisweights = torch.ones_like(weights)
                     for dimi, offsetdim in enumerate(offsetdims):
@@ -136,7 +133,7 @@ class Grid:
                             thisweights *= (1 - offset[..., dimi])
                         if offsetdim == 1:
                             thisweights *= offset[..., dimi]
-                    self.data += torch.bincount(self.nd_to_1d(i + offsetdims), minlength=nelements,
+                    self.data += torch.bincount(self.threed_to_oned(i + offsetdims), minlength=nelements,
                                                 weights=thisweights * weights)
             self.data = self.data.reshape(self.n)
         return self.data
@@ -181,28 +178,11 @@ class ForceGrid(Grid):
 
     def get_accelerations(self, positions):
         """Linear intepolate the gridded forces to the specified positions. This should be preceeded
-        by a cool to grid_acc to (re)compute the accelerations on the grid."""
-        if self.ndim < 3:
-            fi = self.fidx(positions)
-            gd = self.ingrid(positions)
-            i = fi[gd, ...].floor()
-            offset = fi[gd, ...] - i
-            i = i.type(torch.int64)
-            ret = positions.new_zeros(positions.shape[0:-1] + (self.ndim,))
-            if self.ndim == 1:
-                ret[gd] = self.acc[i, :] * (1 - offset[..., 0]) + self.acc[i + 1, :] * offset[..., 0]
-            if self.ndim == 2:
-                ret[gd] = (self.acc[i[..., 0], i[..., 1], :] * (1 - offset[..., 0, None]) * (1 - offset[..., 1, None]) +
-                           self.acc[i[..., 0], i[..., 1] + 1, :] * (1 - offset[..., 0, None]) * offset[..., 1, None] +
-                           self.acc[i[..., 0] + 1, i[..., 1], :] * offset[..., 0, None] * (1 - offset[..., 1, None]) +
-                           self.acc[i[..., 0] + 1, i[..., 1] + 1, :] * offset[..., 0, None] * offset[..., 1, None])
-                return ret
-
-        if self.ndim == 3:
-            samples = (positions / self.max).unsqueeze(0).unsqueeze(2).unsqueeze(3)
-            image = self.acc.permute(3, 2, 1, 0)  # change to:      C x W x H x D
-            image = image.unsqueeze(0)  # change to:  1 x C x W x H x D
-            return torch.nn.functional.grid_sample(image, samples, mode='bilinear').squeeze().t()
+        by a call to grid_acc to (re)compute the accelerations on the grid."""
+        samples = (positions / self.max).unsqueeze(0).unsqueeze(2).unsqueeze(3)
+        image = self.acc.permute(3, 2, 1, 0)  # change to:      C x W x H x D
+        image = image.unsqueeze(0)  # change to:  1 x C x W x H x D
+        return torch.nn.functional.grid_sample(image, samples, mode='bilinear').squeeze().t()
 
     def grid_accelerations(self, positions=None, weights=None, method='nearest'):
         """Takes the brute force approach of removing periodic images by grid doubling in every dimension
@@ -210,59 +190,33 @@ class ForceGrid(Grid):
         if positions is not None:
             self.griddata(positions, weights, method)
         rho = self.data
-        padrho = rho.new_zeros([n * 2 for n in self.n])
+        nx, ny, nz = rho.shape[0], rho.shape[1], rho.shape[2]
 
-        # Treat each case of different dimensions seperately since theres at most 3 in the real world
-        if self.ndim == 1:
-            nx = rho.shape[0]
-            padrho[0:nx] = rho
-            rhofft = torch.rfft(padrho, 1, onesided=True)
-            if self.greenfft is None or rhofft.shape != self.greenfft.shape:
-                x = torch.arange(-nx, nx, dtype=rhofft.dtype, device=rhofft.device) * self.dx[0]
-                padgreen = ForceGrid.smoothing_pot(x.abs(), epsilon=self.epsilon)
-                self.greenfft = torch.rfft(padgreen, 1, onesided=True)
-            self.pot = torch.irfft(ForceGrid.complex_mul(rhofft, self.greenfft), 1, onesided=True,
-                                   signal_sizes=padrho.shape)
-            self.pot = self.pot[nx:]
+        padrho = rho.new_zeros([2 * nx, 2 * ny, 2 * nz])
+        padrho[0:nx, 0:ny, 0:nz] = rho
 
-        if self.ndim == 2:
-            nx, ny = rho.shape[0], rho.shape[1]
-            padrho[0:nx, 0:ny] = rho
-            rhofft = torch.rfft(padrho, 2, onesided=False)
-            if self.greenfft is None or rhofft.shape != self.greenfft.shape:
-                x = torch.arange(-nx, nx, dtype=rhofft.dtype, device=rhofft.device) * self.dx[0]
-                y = torch.arange(-ny, ny, dtype=rhofft.dtype, device=rhofft.device) * self.dx[1]
-                r = torch.sqrt(x[:, None] ** 2 + y[None, :] ** 2)
-                padgreen = ForceGrid.smoothing_pot(r, epsilon=self.epsilon)
-                self.greenfft = torch.rfft(padgreen, 2, onesided=False)
-            self.pot = torch.irfft(ForceGrid.complex_mul(rhofft, self.greenfft), 2, onesided=False)
-            self.pot = self.pot[nx:, ny:]
+        if self.greenfft is None or padrho.shape != self.greenfft.shape[:-1]:
+            x = torch.arange(-nx, nx, dtype=rho.dtype, device=rho.device) * self.dx[0]
+            y = torch.arange(-ny, ny, dtype=rho.dtype, device=rho.device) * self.dx[1]
+            z = torch.arange(-nz, nz, dtype=rho.dtype, device=rho.device) * self.dx[2]
+            self.greenfft = torch.rfft(ForceGrid.smoothing_pot(
+                (x[:, None, None] ** 2 + y[None, :, None] ** 2 + z[None, None, :] ** 2).sqrt(),
+                epsilon=self.epsilon),
+                3, onesided=False)
+        rhofft = torch.rfft(padrho, 3, onesided=False)
+        del padrho
+        rhofft = ForceGrid.complex_mul(rhofft, self.greenfft)
+        self.pot = torch.irfft(rhofft, 3, onesided=False)
+        del rhofft
+        self.pot = self.pot[nx:, ny:, nz:]
 
-        if self.ndim == 3:
-            nx, ny, nz = rho.shape[0], rho.shape[1], rho.shape[2]
-            padrho[0:nx, 0:ny, 0:nz] = rho
-            if self.greenfft is None or padrho.shape != self.greenfft.shape[:-1]:
-                x = torch.arange(-nx, nx, dtype=rho.dtype, device=rho.device) * self.dx[0]
-                y = torch.arange(-ny, ny, dtype=rho.dtype, device=rho.device) * self.dx[1]
-                z = torch.arange(-nz, nz, dtype=rho.dtype, device=rho.device) * self.dx[2]
-                self.greenfft = torch.rfft(ForceGrid.smoothing_pot(
-                    (x[:, None, None] ** 2 + y[None, :, None] ** 2 + z[None, None, :] ** 2).sqrt(),
-                    epsilon=self.epsilon),
-                    3, onesided=False)
-            rhofft = torch.rfft(padrho, 3, onesided=False)
-            del padrho
-            rhofft = ForceGrid.complex_mul(rhofft, self.greenfft)
-            self.pot = torch.irfft(rhofft, 3, onesided=False)
-            del rhofft
-            self.pot = self.pot[nx:, ny:, nz:]
-
-        self.acc = self.pot.new_zeros(self.pot.shape + (self.ndim,))
-        for dim in range(self.ndim):
+        self.acc = self.pot.new_zeros(self.pot.shape + (3,))
+        for dim in (0, 1, 2):
             self.acc[..., dim] = self.__diff(self.pot, dim, d=self.dx[dim])
 
     @staticmethod
     def __diff(vector, dim, d=1.0):
-        """Helper function for differentiaitnf the potential to get the accelerations"""
+        """Helper function for differentiating the potential to get the accelerations"""
         ret = (vector.roll(-1, dim) - vector.roll(1, dim)) / (2 * d)
         if dim == 0:
             ret[0, ...] = (vector[1, ...] - vector[0, ...]) / d
