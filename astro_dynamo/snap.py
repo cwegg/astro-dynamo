@@ -62,6 +62,12 @@ class SnapShot:
             newsnap.gasrange = self.gasrange
             return newsnap
 
+    def as_numpy_array(self):
+        """Returns as a nmagic type matricx of dimension [:,7] with positions at [:,1:4], velocities at [:,4:7] and
+        masses at [:,7]"""
+        martrix = torch.cat((self.positions,self.velocities,self.masses.unsqueeze(dim=1)),dim=1)
+        return martrix.to(torch.device('cpu')).numpy()
+
     @property
     def particletype(self):
         return self.__particletype
