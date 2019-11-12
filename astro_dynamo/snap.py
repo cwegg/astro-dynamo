@@ -5,7 +5,7 @@ from enum import IntFlag
 from torch.utils.data import WeightedRandomSampler
 
 float_dtype = torch.float32
-
+pi = torch.Tensor([3.14159265358979323846])
 
 class ParticleType(IntFlag):
     """Enum for storing particle type: Gas, Star, DarkMatter"""
@@ -18,7 +18,8 @@ class ParticleType(IntFlag):
 
 class SnapShot:
     def __init__(self, file=None, positions=None, velocities=None,
-                 masses=None, particletype=None, time=0., omega=0., dt=None):
+                 masses=None, particle_type=None, time=0., omega=0., dt=None,
+                 particle_type_mapping=None):
         if file is None and (positions is None or velocities is None or masses is None):
             raise TypeError('Need either a snapshot to load, or positions, velocities and masses.')
         if positions is not None:
@@ -31,10 +32,15 @@ class SnapShot:
             self.velocities = snap[:, 3:6]
             self.masses = snap[:, 6]
             if snap.shape[1] >= 8:
-                particletype = snap[:, 7].type(torch.uint8)
-        if particletype is None:
-            particletype = torch.full(self.masses.shape, ParticleType.Star, dtype=torch.uint8)
-        self.__particletype = particletype
+                particle_type = snap[:, 7].type(torch.uint8)
+                if particle_type_mapping is not None:
+                    mapped_particle_type = torch.zeros_like(particle_type)
+                    for key, value in particle_type_mapping.items():
+                        mapped_particle_type.masked_fill_(particle_type == key, value)
+                    particle_type = mapped_particle_type
+        if particle_type is None:
+            particle_type = torch.full(self.masses.shape, ParticleType.Star, dtype=torch.uint8)
+        self.__particletype = particle_type
         self.time = torch.as_tensor(time)
         self.omega = torch.as_tensor(omega)
         self.n = len(self.masses)
@@ -54,7 +60,7 @@ class SnapShot:
             newsnap = SnapShot(positions=self.positions.to(device),
                                velocities=self.velocities.to(device),
                                masses=self.masses.to(device),
-                               particletype=self.particletype.to(device),
+                               particle_type=self.particletype.to(device),
                                dt=self.dt.to(device),
                                time=self.time.to(device), omega=self.omega.to(device))
             newsnap.dmrange = self.dmrange
@@ -149,7 +155,7 @@ class SnapShot:
         newsnap = SnapShot(positions=self.positions[i, :],
                            velocities=self.velocities[i, :],
                            masses=self.masses[i],
-                           particletype=self.particletype[i],
+                           particle_type=self.particletype[i],
                            time=self.time, omega=self.omega)
         if self.dt is not None:
             newsnap.dt = self.dt[i]
@@ -297,8 +303,8 @@ class SnapShot:
             return timenow
 
     @classmethod
-    def corotating_frame(cls, omega, time, positions, velocities=None, inplace=False):
-        """Uses the time to rotate positions (and optionally velocities) from the rotating to the corotating frame.
+    def rotate_snap(cls, angle, positions, velocities=None, inplace=False, deg=False):
+        """Rotates the bar by angle about the z-axis.
         Returns positions, velocities in the corotating frame. Optionally updates the positions and velocities inplace"""
         if inplace:
             corotating_positions = positions
@@ -306,8 +312,11 @@ class SnapShot:
             corotating_positions = torch.zeros_like(positions)
             corotating_positions[..., 2] = positions[..., 2]
 
-        phase = torch.as_tensor(omega * time)
-        cp, sp = torch.cos(phase), torch.sin(phase)
+        # Idea is to make the 2x2 rotation matrix R and apply to the x-y plane for positions/velocities
+        angle = torch.as_tensor(angle)
+        if deg:
+            angle *= math.pi / 180.
+        cp, sp = torch.cos(angle), torch.sin(angle)
         R = torch.stack((cp, -sp, sp, cp)).view(2, 2, len(cp)).permute(2, 0, 1)
         corotating_positions[..., 0:2] = (R @ positions[..., 0:2, None])[..., 0]
         if velocities is None:
@@ -320,6 +329,13 @@ class SnapShot:
                 corotating_velocities[..., 2] = velocities[..., 2]
             corotating_velocities[..., 0:2] = (R @ velocities[..., 0:2, None])[..., 0]
             return corotating_positions, corotating_velocities
+
+
+    @classmethod
+    def corotating_frame(cls, omega, time, positions, velocities=None, inplace=False):
+        """Uses the time to rotate positions (and optionally velocities) from the rotating to the corotating frame.
+        Returns positions, velocities in the corotating frame. Optionally updates the positions and velocities inplace"""
+        return cls.rotate_snap(omega * time, positions, velocities=velocities, inplace=inplace)
 
     def resample(self, potential, verbose=False, velocity_perturbation=0.01):
 
