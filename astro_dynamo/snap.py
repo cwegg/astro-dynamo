@@ -5,7 +5,6 @@ from enum import IntFlag
 from torch.utils.data import WeightedRandomSampler
 
 float_dtype = torch.float32
-pi = torch.Tensor([3.14159265358979323846])
 
 class ParticleType(IntFlag):
     """Enum for storing particle type: Gas, Star, DarkMatter"""
@@ -71,19 +70,13 @@ class SnapShot:
     def as_numpy_array(self):
         """Returns as a nmagic type matricx of dimension [:,7] with positions at [:,1:4], velocities at [:,4:7] and
         masses at [:,7]"""
-        martrix = torch.cat((self.positions,self.velocities,self.masses.unsqueeze(dim=1)),dim=1)
+        martrix = torch.cat((self.positions, self.velocities, self.masses.unsqueeze(dim=1)), dim=1)
         return martrix.to(torch.device('cpu')).numpy()
 
-    @property
-    def particletype(self):
-        return self.__particletype
-
-    @particletype.setter
-    def particletype(self, particletype):
-        self.__particletype = particletype
-        self.__organise()
 
     def __organise(self):
+        """We sort the particles by type. This improves speed because then we can just take a slice of the snapshot
+        when we want stars/gas/dm."""
         ind = torch.argsort(self.__particletype, descending=True)
         self.positions = self.positions[ind, :]
         self.velocities = self.velocities[ind, :]
@@ -93,6 +86,15 @@ class SnapShot:
         self.starrange = (0, counts[ParticleType.Star])
         self.gasrange = (self.starrange[1], self.starrange[1] + counts[ParticleType.Gas])
         self.dmrange = (self.gasrange[1], self.gasrange[1] + counts[ParticleType.DarkMatter])
+
+    @property
+    def particletype(self):
+        return self.__particletype
+
+    @particletype.setter
+    def particletype(self, particletype):
+        self.__particletype = particletype
+        self.__organise()
 
     @property
     def dm(self):
@@ -161,7 +163,7 @@ class SnapShot:
             newsnap.dt = self.dt[i]
         return newsnap
 
-    def integrate(self, time, potential, minsteps=1, maxsteps=2 ** 20, stepsperorbit=800, verbose=False):
+    def integrate(self, time, potentials, minsteps=1, maxsteps=2 ** 20, stepsperorbit=800, verbose=False):
         """"
         Integrate the snapshot until time. Use a minimum timestep of mindt (default 1e-6) and aim for
         stepsperorbit (default 800) steps per orbit.
@@ -223,9 +225,8 @@ class SnapShot:
                 timenow = initial_time + thisdt * 0.5
                 for step in range(thissteps):
                     # Get accelerations in from corotating frame
-                    accelerations = potential.get_accelerations(
-                        self.corotating_frame(self.omega, timenow - initial_time,
-                                              positions))
+                    accelerations = self.get_accelerations(potentials, self.corotating_frame(self.omega, timenow -
+                                                                                             initial_time, positions))
                     self.corotating_frame(-self.omega, timenow - initial_time, accelerations,
                                           inplace=True)  # Move accelerations to inertial frame
                     velocities -= accelerations * thisdt[:, None]
@@ -254,11 +255,45 @@ class SnapShot:
         if blockstep:
             self.time = time
 
-    def leapfrog_steps(self, potential, steps, stepsperorbit=800, verbose=False, return_time=False):
+    @classmethod
+    def get_accelerations(cls, potentials, positions):
+        """Helper function to combine accelerations from list of potentials"""
+        accelerations = potentials[0].get_accelerations(positions)
+        for potential in potentials[1:]:
+            accelerations.add_(potential.get_accelerations(positions))
+        return accelerations
+
+    @classmethod
+    def ingrid(cls, potentials, positions):
+        """Helper function to combine accelerations from list of potentials"""
+        ingrid = torch.full_like(positions[..., 0], True, dtype=torch.bool)
+        for potential in potentials:
+            try:
+                ingrid = ingrid & potential.ingrid(positions)
+            except AttributeError:
+                # Potential doesn't have an ingrid method: all assumed to be in-grid
+                pass
+        return ingrid
+
+    def leapfrog_steps(self, potentials, steps, stepsperorbit=800, verbose=False, return_time=False):
+        """"
+        Integrate the snapshot for a set number of timesteps. Because the timestep is so there are stepsperorbit steps
+        for each orbit (roughly) then this corresponds to integrating for roughly steps/stepsperorbit orbits.
+
+        There are two reasons for prefering this over integrating for a length of time:
+            - When fitting dynamical models we want all regions to be in equilibrium, regardless of orbital time, so
+              we are limited by the longest timescale outer regions, and spend most of our time integrating the short
+              timescale inner regions.
+            - This is more efficient since we can be completely vectorised, just making a different timestep for each
+              particle.
+
+        Note that we integrate in the inertial frame, but store the particles back to the corotating frame at the end.
+        """
+
         baddt = (self.dt == float("Inf"))
         if baddt.sum() > 0:
             print('Estimating dt')
-            accelerations = potential.get_accelerations(self.positions[baddt, :])
+            accelerations = self.get_accelerations(potentials, self.positions[baddt, :])
             self.dt[baddt] = 2 * math.pi * (
                     (self.positions[baddt, :].norm(dim=-1) + 1e-3) / (
                     accelerations.norm(dim=-1) + 1e-5)).sqrt() / stepsperorbit
@@ -268,33 +303,14 @@ class SnapShot:
         bad = (self.dt < 0)
         for step in range(steps):
             # Get accelerations in from corotating frame
-            accelerations = potential.get_accelerations(self.corotating_frame(self.omega, timenow, self.positions))
+            accelerations = self.get_accelerations(potentials,
+                                                   self.corotating_frame(self.omega, timenow, self.positions))
             self.corotating_frame(-self.omega, timenow, accelerations,
                                   inplace=True)  # Move accelerations to inertial frame
             self.velocities -= accelerations * self.dt[:, None]
             self.positions += self.velocities * self.dt[:, None]
             timenow += self.dt
 
-            # Timestep adjustment: for particles where the estimated ideal timestep is too short by 0.75 we wind back to
-            # before the step. Note we don't care exactly what time each particles position is at, and just want
-            # to move roughly steps/stepsperorbit so there's no need to repeat the step
-            # total_acceleration=accelerations.norm(dim=-1)
-            # ideal_dt = 2 * math.pi * (
-            #        (self.positions.norm(dim=-1) + 1e-3) / (
-            #        total_acceleration + 1e-5)).sqrt() / stepsperorbit
-            # idx_bad = (0.5*self.dt>ideal_dt) & (total_acceleration>0)
-            # if idx_bad.sum() > 0:
-            # if idx_bad.sum() > 4000:
-            #    from IPython.core.debugger import set_trace
-            #    set_trace()
-            # wind back operations, and setup for new timestep
-
-            #    self.positions[idx_bad,:] -= self.velocities[idx_bad,:] * self.dt[idx_bad, None]
-            #    self.velocities[idx_bad,:] += accelerations[idx_bad,:] * self.dt[idx_bad, None]
-            #    self.positions[idx_bad,:] -= self.velocities[idx_bad,:] * (self.dt[idx_bad, None]-ideal_dt[idx_bad,None]) * 0.5
-            #    timenow[idx_bad] += 0.5*ideal_dt[idx_bad] - 1.5*self.dt[idx_bad]
-            #    self.dt[idx_bad] = ideal_dt[idx_bad]
-            #    bad[idx_bad] = 1
         if verbose:
             print(f'Bad: {idx_bad.sum()} Total Bad seen: {bad.sum()}')
         self.positions -= self.velocities * self.dt[:, None] * 0.5
@@ -305,7 +321,8 @@ class SnapShot:
     @classmethod
     def rotate_snap(cls, angle, positions, velocities=None, inplace=False, deg=False):
         """Rotates the bar by angle about the z-axis.
-        Returns positions, velocities in the corotating frame. Optionally updates the positions and velocities inplace"""
+        Returns positions, velocities in the corotating frame. Optionally updates the positions and velocities
+        inplace"""
         if inplace:
             corotating_positions = positions
         else:
@@ -313,7 +330,7 @@ class SnapShot:
             corotating_positions[..., 2] = positions[..., 2]
 
         # Idea is to make the 2x2 rotation matrix R and apply to the x-y plane for positions/velocities
-        angle = torch.as_tensor(angle)
+        angle = torch.as_tensor(angle, device=positions.device, dtype=positions.dtype)
         if deg:
             angle *= math.pi / 180.
         cp, sp = torch.cos(angle), torch.sin(angle)
@@ -330,16 +347,18 @@ class SnapShot:
             corotating_velocities[..., 0:2] = (R @ velocities[..., 0:2, None])[..., 0]
             return corotating_positions, corotating_velocities
 
-
     @classmethod
     def corotating_frame(cls, omega, time, positions, velocities=None, inplace=False):
         """Uses the time to rotate positions (and optionally velocities) from the rotating to the corotating frame.
         Returns positions, velocities in the corotating frame. Optionally updates the positions and velocities inplace"""
         return cls.rotate_snap(omega * time, positions, velocities=velocities, inplace=inplace)
 
-    def resample(self, potential, verbose=False, velocity_perturbation=0.01):
+    def resample(self, potentials, verbose=False, velocity_perturbation=0.01):
+        """Resamples the model, splitting the particles randomly proportional to mass. For particles with more than
+        one copy then then the daughter particles are sampled along the orbit and given a small velocity perturbation
+        of fraction velocity_perturbation (default 0.01) in the rotating frame."""
 
-        gd = potential.ingrid(self.positions).nonzero()[:, 0]
+        gd = self.ingrid(potentials, self.positions).nonzero()[:, 0]
         i = torch.multinomial(self.masses[gd], self.n, replacement=True).sort().values
 
         # copy the resampled positions - the first copy of each particle is the parent particle and will
@@ -350,8 +369,7 @@ class SnapShot:
         # self.dt.fill_(1.0)
         self.dt.copy_(self.dt[gd[i]])
 
-
-        accelerations = potential.get_accelerations(self.positions)
+        accelerations = self.get_accelerations(potentials, self.positions)
         tau = 2 * math.pi * ((self.positions.norm(dim=-1) + 1e-3) / (accelerations.norm(dim=-1) + 1e-5)).sqrt()
         # compute the sample time for each child particle
         sample_time = torch.zeros_like(self.masses)
@@ -366,7 +384,7 @@ class SnapShot:
                                                                                                     device=sample_time.device).repeat(
                     number_of_n_children) / n_children
         sample_time *= tau
-        self.integrate(sample_time, potential, minsteps=1024, maxsteps=8192, verbose=verbose)
+        self.integrate(sample_time, potentials, minsteps=1024, maxsteps=8192, verbose=verbose)
 
         # perturb the velocities of the children in the rotating frame
         children = (sample_time > 0)
@@ -376,4 +394,3 @@ class SnapShot:
                 self.velocities[children, 1] + self.omega * self.positions[children, 0])
         self.velocities[children, 2] += velocity_perturbation * torch.randn_like(self.velocities[children, 2]) * \
                                         self.velocities[children, 2]
-
