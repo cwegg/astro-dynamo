@@ -14,8 +14,7 @@ def patternspeed(snap, rrange=(1, 4), n=range(2, 12, 2), combine=True, plot=None
           snap.positions[:, 0] * snap.velocities[:, 1]) / rcyl
 
     rbins = np.linspace(0., 10, 50)
-    rmid, (surfdensft, surfdensrvrft, surfdensvtft) = bar_cyl_fft(snap, rbins=rbins, phibins=phibins,
-                                                                  weights=(None, vr * rcyl, vt))
+    rmid, (surfdensft, surfdensrvrft, surfdensvtft) = bar_cyl_fft(snap, rbins=rbins, weights=(None, vr * rcyl, vt))
     dr = rbins[1] - rbins[0]
     dsurfdensrvr_drft = np.zeros_like(surfdensrvrft)
     dsurfdensrvr_drft[0, :] = (surfdensrvrft[1, :] - surfdensrvrft[0, :]) / dr
@@ -68,7 +67,8 @@ def bar_cyl_fft(snap, rbins=None, phibins=None, weights=(None,)):
             totalweight = snap.masses
         else:
             totalweight = snap.masses * weight
-        h, redges, phiedges = np.histogram2d(rcyl.numpy(), phi.numpy(), (rbins, phibins), weights=totalweight)
+        h, redges, phiedges = np.histogram2d(rcyl.cpu().numpy(), phi.cpu().numpy(), (rbins, phibins),
+                                             weights=totalweight.cpu())
         area = 0.5 * (redges[1:, np.newaxis] ** 2 - redges[:-1, np.newaxis] ** 2) * (
                 phiedges[np.newaxis, 1:] - phiedges[np.newaxis, :-1])
         surfdens = h / area
