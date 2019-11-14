@@ -2,7 +2,7 @@ import torch
 import math
 from scipy.special import roots_legendre
 import numpy as np
-import scipy
+import scipy.optimize
 import matplotlib.pylab as plt
 
 
@@ -31,17 +31,26 @@ def _cached_roots_legendre(n):
 _cached_roots_legendre.cache = dict()
 
 
-def fixed_quad(func, n=5, dtype=torch.float32):
+def fixed_quad(func, n=5, dtype=torch.float32, device=None):
     y, w = _cached_roots_legendre(n)
-    return torch.sum(w.to(dtype=dtype) * func(y.to(dtype=dtype)), axis=-1)
+    return torch.sum(w.to(dtype=dtype, device=device) * func(y.to(dtype=dtype, device=device)), axis=-1)
 
 
 class SpheroidalPotential:
-    def __init__(self, rho_func, q=1.0):
-        self.q = q
+    def __init__(self, rho_func, q=torch.Tensor([1.0])):
+        self.q = torch.as_tensor(q)
         self.rho = rho_func
         self.grid = None
         self.r_max, self.z_max = None, None
+
+    def to(self, device=None, dtype=None, *args, **kwargs):
+        if (dtype is None or self.q.dtype == dtype) and (device is None or self.q.device == device):
+            return self
+        else:
+            new_pot = SpheroidalPotential(self.rho, q=self.q.to(device=device, dtype=dtype, *args, **kwargs))
+            if self.grid is not None: new_pot.grid = self.grid.to(device=device, dtype=dtype, *args, **kwargs)
+            new_pot.r_max, new_pot.z_max = self.r_max, self.z_max
+            return new_pot
 
     def _f_compute(self, r_cyl, z, rel_tol, direction='r_cyl', *args, **kwargs):
         if rel_tol is None:
@@ -60,7 +69,7 @@ class SpheroidalPotential:
                 return self.rho(m, *args, **kwargs) / (tau + 1) ** 2 / torch.sqrt(tau + self.q ** 2) * 3 * tau \
                        / x / (1 - x)
 
-            integral = r_cyl * self._fixedquad(integrand, rel_tol=rel_tol, dtype=z.dtype)
+            integral = r_cyl * self._fixedquad(integrand, rel_tol=rel_tol, dtype=z.dtype, device=z.device)
 
         elif direction == 'z':
 
@@ -71,7 +80,7 @@ class SpheroidalPotential:
                 return self.rho(m, *args, **kwargs) / (tau + 1) / (tau + self.q ** 2) ** 1.5 * 3 * tau \
                        / x / (1 - x)
 
-            integral = z * self._fixedquad(integrand, rel_tol=rel_tol, dtype=z.dtype)
+            integral = z * self._fixedquad(integrand, rel_tol=rel_tol, dtype=z.dtype, device=z.device)
 
         else:
             raise ValueError("Direction should be ('r_cyl'|'z')")
@@ -119,23 +128,23 @@ class SpheroidalPotential:
         return z, r_cyl
 
     @staticmethod
-    def _fixedquad(func, n=None, n_max=100, n_min=10, rel_tol=1e-6, dtype=torch.float32):
+    def _fixedquad(func, n=None, n_max=100, n_min=10, rel_tol=1e-6, dtype=torch.float32, device=None):
         """Integrate func from 0->1 using Gaussian quadrature of order n if set.
         Else provide answer with estimated relative error less than rel_tol (up to a
         maximum order of n_max"""
         if n is None:
-            val = old_val = fixed_quad(func, n=n_min, dtype=dtype)
+            val = old_val = fixed_quad(func, n=n_min, dtype=dtype, device=device)
             for n in range(n_min + 5, n_max, 5):
-                val = fixed_quad(func, n=n, dtype=dtype)
+                val = fixed_quad(func, n=n, dtype=dtype, device=device)
                 rel_err = torch.max(torch.abs((val - old_val) / val))
                 if rel_err < rel_tol:
                     break
                 old_val = val
         else:
-            val = fixed_quad(func, n=n, dtype=dtype)
+            val = fixed_quad(func, n=n, dtype=dtype, device=device)
         return val
 
-    def grid_acc(self, r_max=10, z_max=10, r_bins=512, z_bins=1024):
+    def grid_acc(self, r_max=10., z_max=10., r_bins=512, z_bins=1024):
         """Linear interpolate the gridded forces to the specified positions. This should be preceeded
         by a call to grid_acc to (re)compute the accelerations on the grid."""
         r = torch.linspace(0, r_max, r_bins)
