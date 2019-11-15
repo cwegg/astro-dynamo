@@ -80,19 +80,20 @@ def bar_cyl_fft(snap, rbins=None, phibins=None, weights=(None,)):
     return rmid, ft_out
 
 
-def compute_bar_angle(snap, deg=True):
+def compute_bar_angle(snap, max_r=5, deg=True):
     """Computes the bar angle of a snapshot from angle of the m=2 mode at its maximum"""
-    _, surfdensft = bar_cyl_fft(snap)
-    m2 = np.abs(surfdensft[:, 2]) / np.abs(surfdensft[:, 0])
+    r, surfdensft = bar_cyl_fft(snap)
+    gd_i = (r < max_r)
+    m2 = np.abs(surfdensft[gd_i, 2]) / np.abs(surfdensft[gd_i, 0])
     ifid = np.argmax(m2)
-    bar_angle = -0.5 * np.angle(surfdensft[ifid, 2], deg=deg)
+    bar_angle = -0.5 * np.angle(surfdensft[gd_i, 2][ifid], deg=deg)
     return bar_angle
 
 
-def align_bar(snap):
+def align_bar(snap, max_r=5):
     """Rotates the bar so that it is aligned to the x-axis. Specifically the m=2 mode is rotated to lie along the x-axis
     at its maximum"""
-    bar_angle = compute_bar_angle(snap, deg=False)
+    bar_angle = compute_bar_angle(snap, max_r=5, deg=False)
     _ = snap.rotate_snap([-bar_angle], snap.positions, snap.velocities, deg=False,
                          inplace=True)
 
