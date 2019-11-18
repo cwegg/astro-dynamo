@@ -1,0 +1,17 @@
+cmd: ./run_gyrfalcon.sh M80
+deps:
+- path: M80_magalie
+- path: run_gyrfalcon.sh
+outs:
+- path: M80_gyrfalcon
+  cache: true
+  metric: false
+  persist: false
+- path: M80_gyrfalcon.log
+  cache: true
+  metric: false
+  persist: false
+- path: M80_gyrfalcon.stdout
+  cache: true
+  metric: false
+  persist: false

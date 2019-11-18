@@ -1,0 +1,16 @@
+md5: b116a61cdbe660ee9140da13489b9a46
+cmd: ./M87.5_magalie.sh
+deps:
+- md5: c711598009a6eca2254bcfdb4d5a321e
+  path: M87.5_magalie.sh
+outs:
+- md5: e2084afbb909ab87dde72ff4ba8d1e3a
+  path: M87.5_magalie
+  cache: true
+  metric: false
+  persist: false
+- md5: c91f9c3ec9924c82863f8a6d19889b62.dir
+  path: M87.5_magalie.tmpdir
+  cache: false
+  metric: false
+  persist: false
