@@ -1,2 +1,3 @@
 /inputmodels
 /notebooks/plots
+*.egg-info

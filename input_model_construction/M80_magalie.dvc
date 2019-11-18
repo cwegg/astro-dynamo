@@ -1,0 +1,16 @@
+cmd: ./M80_magalie.sh
+deps:
+- path: M80_magalie.sh
+  md5: f6f340582d557e1b81ea69286da8080d
+outs:
+- path: M80_magalie
+  cache: true
+  metric: false
+  persist: false
+  md5: 517789bfa20f9786584d12f9e25e628b
+- path: M80_magalie.tmpdir
+  cache: false
+  metric: false
+  persist: false
+  md5: 7aedaf764be3ef5f47ef5866af0f6335.dir
+md5: 69a0d7584430d85d4251a9a2bd185739
