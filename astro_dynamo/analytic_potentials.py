@@ -144,11 +144,11 @@ class SpheroidalPotential:
             val = fixed_quad(func, n=n, dtype=dtype, device=device)
         return val
 
-    def grid_acc(self, r_max=10., z_max=10., r_bins=512, z_bins=1024):
+    def grid_accelerations(self, r_max=10., z_max=10., r_bins=512, z_bins=1024):
         """Linear interpolate the gridded forces to the specified positions. This should be preceeded
         by a call to grid_acc to (re)compute the accelerations on the grid."""
-        r = torch.linspace(0, r_max, r_bins)
-        z = torch.linspace(-z_max, z_max, z_bins)
+        r = torch.linspace(0, r_max, r_bins, device=self.q.device)
+        z = torch.linspace(-z_max, z_max, z_bins, device=self.q.device)
         self.r_max, self.z_max = r_max, z_max
         f_r_cyl = self.f_r_cyl(r, z.unsqueeze(-1))
         f_z = self.f_z(r, z.unsqueeze(-1))
@@ -260,8 +260,8 @@ def fit_spheroidal_function_to_snap(snap, rho_func, init_parms, m_range=(1, 20),
 
     (mass2, medge) = np.histogram(m, m_bins, weights=snap.dm.masses)
     Neff = mass ** 2 / mass2
-
-    popt, pcov = scipy.optimize.curve_fit(rho_func, mmid, rho, p0=init_parms, sigma=rho / np.sqrt(Neff))
+    rho_numpy = lambda x, *args, **kwargs: rho_func(x, *args, **kwargs).cpu().numpy()
+    popt, pcov = scipy.optimize.curve_fit(rho_numpy, mmid, rho, p0=init_parms, sigma=rho / np.sqrt(Neff))
     perr = np.sqrt(np.diag(pcov))
     if plot:
         f, ax = plt.subplots()

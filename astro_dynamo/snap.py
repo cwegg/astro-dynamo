@@ -229,7 +229,7 @@ class SnapShot:
                                                                                              initial_time, positions))
                     self.corotating_frame(-self.omega, timenow - initial_time, accelerations,
                                           inplace=True)  # Move accelerations to inertial frame
-                    velocities -= accelerations * thisdt[:, None]
+                    velocities += accelerations * thisdt[:, None]
                     tau = 2 * math.pi * (
                             (positions.norm(dim=-1) + 1e-3) / (
                             accelerations.norm(dim=-1) + 1e-5)).sqrt() / stepsperorbit
@@ -307,7 +307,7 @@ class SnapShot:
                                                    self.corotating_frame(self.omega, timenow, self.positions))
             self.corotating_frame(-self.omega, timenow, accelerations,
                                   inplace=True)  # Move accelerations to inertial frame
-            self.velocities -= accelerations * self.dt[:, None]
+            self.velocities += accelerations * self.dt[:, None]
             self.positions += self.velocities * self.dt[:, None]
             timenow += self.dt
 
@@ -334,8 +334,8 @@ class SnapShot:
         if deg:
             angle *= math.pi / 180.
         cp, sp = torch.cos(angle), torch.sin(angle)
-        R = torch.stack((cp, -sp, sp, cp)).view(2, 2, len(cp)).permute(2, 0, 1)
-        corotating_positions[..., 0:2] = (R @ positions[..., 0:2, None])[..., 0]
+        corotating_positions[..., 0:2] = torch.stack((cp * positions[..., 0] - sp * positions[..., 1],
+                                                      sp * positions[..., 0] + cp * positions[..., 1]), dim=-1)
         if velocities is None:
             return corotating_positions
         else:
@@ -344,7 +344,9 @@ class SnapShot:
             else:
                 corotating_velocities = torch.zeros_like(velocities)
                 corotating_velocities[..., 2] = velocities[..., 2]
-            corotating_velocities[..., 0:2] = (R @ velocities[..., 0:2, None])[..., 0]
+            corotating_velocities[..., 0:2] = torch.stack((cp * velocities[..., 0] - sp * velocities[..., 1],
+                                                           sp * velocities[..., 0] + cp * velocities[..., 1]), dim=-1)
+
             return corotating_positions, corotating_velocities
 
     @classmethod

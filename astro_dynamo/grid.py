@@ -154,8 +154,8 @@ class ForceGrid(Grid):
         else:
             gridedges = torch.stack((self.min, self.max), dim=1).to(device)
             grid = ForceGrid(gridedges=gridedges, n=self.n, data=self.data.to(device))
-            if self.acc is not None:
-                grid.acc = self.acc.to(device)
+            if self.acc is not None: grid.acc = self.acc.to(device)
+            if self.pot is not None: grid.pot = self.pot.to(device)
             return grid
 
     @staticmethod
@@ -182,6 +182,14 @@ class ForceGrid(Grid):
         samples = (positions / self.max).unsqueeze(0).unsqueeze(2).unsqueeze(3)
         image = self.acc.permute(3, 2, 1, 0)  # change to:      C x W x H x D
         image = image.unsqueeze(0)  # change to:  1 x C x W x H x D
+        return torch.nn.functional.grid_sample(image, samples, mode='bilinear').squeeze().t()
+
+    def get_potential(self, positions):
+        """Linear intepolate the gridded potential to the specified positions. This should be preceeded
+        by a call to grid_acc to (re)compute the potential on the grid."""
+        samples = (positions / self.max).unsqueeze(0).unsqueeze(2).unsqueeze(3)
+        image = self.pot.permute(2, 1, 0)  # change to:      C x W x H x D - with C=1 for potential
+        image = image.unsqueeze(0).unsqueeze(0)  # change to:  1 x C x W x H x D - with C=1 for potential
         return torch.nn.functional.grid_sample(image, samples, mode='bilinear').squeeze().t()
 
     def grid_accelerations(self, positions=None, weights=None, method='nearest'):
@@ -212,7 +220,7 @@ class ForceGrid(Grid):
 
         self.acc = self.pot.new_zeros(self.pot.shape + (3,))
         for dim in (0, 1, 2):
-            self.acc[..., dim] = self.__diff(self.pot, dim, d=self.dx[dim])
+            self.acc[..., dim] = -self.__diff(self.pot, dim, d=self.dx[dim])
 
     @staticmethod
     def __diff(vector, dim, d=1.0):
