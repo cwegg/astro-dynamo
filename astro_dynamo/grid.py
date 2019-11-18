@@ -17,6 +17,8 @@ class Grid:
             self.min = grid_edges[..., 0]
             self.max = grid_edges[..., 1]
         self.dx = (self.max - self.min) / (self.max.new_tensor(n) - 1)
+        if data is None:
+            data = grid_edges.new_zeros(self.n)
         self.data = data
 
     def to(self, device):
@@ -24,10 +26,7 @@ class Grid:
             return self
         else:
             grid_edges = torch.stack((self.min, self.max), dim=1).to(device)
-            if self.data is not None:
-                data = self.data.to(device)
-            else:
-                data = None
+            data = self.data.to(device)
             return Grid(grid_edges=grid_edges, n=self.n, data=data)
 
     @property
@@ -54,21 +53,21 @@ class Grid:
             return ((positions > self.min[None, :] + h * self.dx[None, :]) &
                     (positions < self.max[None, :] - h * self.dx[None, :])).all(dim=1)
 
-    def fidx(self, positions: torch.Tensor) -> torch.Tensor:
+    def _float_idx(self, positions: torch.Tensor) -> torch.Tensor:
         return (positions - self.min[None, :]) / self.dx
 
-    def threed_to_oned(self, i: torch.Tensor) -> torch.Tensor:
+    def _threed_to_oned(self, i: torch.Tensor) -> torch.Tensor:
         i1d = (i[:, 0] * self.n[1] + i[:, 1]) * self.n[2] + i[:, 2]
         return i1d
 
-    def griddata(self, positions: torch.Tensor, weights: torch.Tensor = None,
-                 method: str = 'nearest', fractional_update: float = 1.0):
+    def grid_data(self, positions: torch.Tensor, weights: torch.Tensor = None,
+                  method: str = 'nearest', fractional_update: float = 1.0):
         """Places data from positions onto grid using method='nearest'|'cic'
         where cic=cloud in cell. Returns gridded data and stores it as class attribute
         data"""
 
         n_elements = reduce(lambda x, y: x * y, self.n)
-        fi = self.fidx(positions)
+        fi = self._float_idx(positions)
         if method == 'nearest':
             gd = self.ingrid(positions)
         else:
@@ -102,7 +101,7 @@ class Grid:
                         thisweights *= (torch.tensor(1.0) - offset[..., dimi])
                     if offsetdim == 1:
                         thisweights *= offset[..., dimi]
-                new_data += torch.bincount(self.threed_to_oned(i + offsetdims), minlength=n_elements,
+                new_data += torch.bincount(self._threed_to_oned(i + offsetdims), minlength=n_elements,
                                            weights=thisweights * weights)
             new_data = new_data.reshape(self.n)
         else:
@@ -145,7 +144,7 @@ class ForceGrid(Grid):
 
     @staticmethod
     def complex_mul(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
-        """Function to do complex multiplicatinos: Pytorch has no complex dtype but 
+        """Function to do complex multiplication: Pytorch has no complex dtype but
         stores complex numbers as an additional two long dimension"""
         return torch.stack([a[..., 0] * b[..., 0] - a[..., 1] * b[..., 1],
                             a[..., 0] * b[..., 1] + a[..., 1] * b[..., 0]], dim=-1)
@@ -153,25 +152,26 @@ class ForceGrid(Grid):
     def get_accelerations(self, positions: torch.Tensor) -> torch.Tensor:
         """Linear intepolate the gridded forces to the specified positions. This should be preceeded
         by a call to grid_acc to (re)compute the accelerations on the grid."""
+        # torch.nn.functional.grid_sample is fast but frustrating to juggle the inputs. See the pytorch documentation
         samples = (positions / self.max).unsqueeze(0).unsqueeze(2).unsqueeze(3)
         image = self.acc.permute(3, 2, 1, 0)  # change to:      C x W x H x D
         image = image.unsqueeze(0)  # change to:  1 x C x W x H x D
-        return torch.nn.functional.grid_sample(image, samples, mode='bilinear').squeeze().t()
+        return torch.nn.functional.grid_sample(image, samples, mode='bilinear', align_corners=True).squeeze().t()
 
     def get_potential(self, positions: torch.Tensor) -> torch.Tensor:
         """Linear intepolate the gridded potential to the specified positions. This should be preceeded
         by a call to grid_acc to (re)compute the potential on the grid."""
+        # torch.nn.functional.grid_sample is fast but frustrating to juggle the inputs. See the pytorch documentation
         samples = (positions / self.max).unsqueeze(0).unsqueeze(2).unsqueeze(3)
         image = self.pot.permute(2, 1, 0)  # change to:      C x W x H x D - with C=1 for potential
         image = image.unsqueeze(0).unsqueeze(0)  # change to:  1 x C x W x H x D - with C=1 for potential
-        return torch.nn.functional.grid_sample(image, samples, mode='bilinear').squeeze().t()
+        return torch.nn.functional.grid_sample(image, samples, mode='bilinear', align_corners=True).squeeze().t()
 
     def grid_accelerations(self, positions: torch.Tensor = None, weights: torch.Tensor = None,
                            method: str = 'nearest'):
-        """Takes the brute force approach of removing periodic images by grid doubling in every dimension
-        returns (pot, acc, greenfft) greenfft can be repassed and reused on the next call"""
+        """Takes the brute force approach of removing periodic images by grid doubling in every dimension."""
         if positions is not None:
-            self.griddata(positions, weights, method)
+            self.grid_data(positions, weights, method)
         rho = self.data
         nx, ny, nz = rho.shape[0], rho.shape[1], rho.shape[2]
 
