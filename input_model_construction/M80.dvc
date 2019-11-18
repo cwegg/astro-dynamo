@@ -1,0 +1,7 @@
+md5: 7a30002eb9eaa7b36a2a99feb50f7afa
+outs:
+- md5: 175b37331d9e23ca4a633f94a326ed6f
+  path: M80
+  cache: true
+  metric: false
+  persist: false
