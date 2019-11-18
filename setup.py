@@ -2,7 +2,7 @@
 
 from setuptools import setup, find_packages
 
-setup(name='astro-dynamo',
+setup(name='astro_dynamo',
       version='0.1',
       description='Tools for making dynamical models',
       author='Chris Wegg',

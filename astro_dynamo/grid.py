@@ -1,18 +1,21 @@
 import torch
+import torch.sparse
+from typing import Union
 from functools import reduce
-
 
 class Grid:
     """Class for gridding data. Assumes grids are symmertic about zero."""
 
-    def __init__(self, gridedges=torch.Tensor((10., 10., 10.)), n=(256, 256, 256), data=None):
+    def __init__(self, grid_edges: torch.Tensor = torch.tensor((10., 10., 10.)),
+                 n: Union[list, tuple] = (256, 256, 256),
+                 data: torch.Tensor = None):
         self.n = n
-        if gridedges.dim() == 1:
-            self.min = -gridedges
-            self.max = gridedges
+        if grid_edges.dim() == 1:
+            self.min = -grid_edges
+            self.max = grid_edges
         else:
-            self.min = gridedges[..., 0]
-            self.max = gridedges[..., 1]
+            self.min = grid_edges[..., 0]
+            self.max = grid_edges[..., 1]
         self.dx = (self.max - self.min) / (self.max.new_tensor(n) - 1)
         self.data = data
 
@@ -20,29 +23,29 @@ class Grid:
         if self.min.device == device:
             return self
         else:
-            gridedges = torch.stack((self.min, self.max), dim=1).to(device)
+            grid_edges = torch.stack((self.min, self.max), dim=1).to(device)
             if self.data is not None:
                 data = self.data.to(device)
             else:
                 data = None
-            return Grid(gridedges=gridedges, n=self.n, data=data)
+            return Grid(grid_edges=grid_edges, n=self.n, data=data)
 
     @property
-    def x(self):
+    def x(self) -> torch.Tensor:
         """Returns grid points in first dimension"""
-        return torch.linspace(self.min[0], self.max[0], self.n[0])
+        return torch.linspace(self.min[0].item(), self.max[0].item(), self.n[0])
 
     @property
-    def y(self):
+    def y(self) -> torch.Tensor:
         """Returns grid points in second dimension"""
-        return torch.linspace(self.min[1], self.max[1], self.n[1])
+        return torch.linspace(self.min[1].item(), self.max[1].item(), self.n[1])
 
     @property
-    def z(self):
+    def z(self) -> torch.Tensor:
         """Returns grid points in third dimension"""
-        return torch.linspace(self.min[2], self.max[2], self.n[2])
+        return torch.linspace(self.min[2].item(), self.max[2].item(), self.n[2])
 
-    def ingrid(self, positions, h=None):
+    def ingrid(self, positions: torch.Tensor, h: float = None) -> torch.Tensor:
         """Test if positions are in the grid"""
         if h is None:
             return ((positions > self.min[None, :]) &
@@ -51,132 +54,103 @@ class Grid:
             return ((positions > self.min[None, :] + h * self.dx[None, :]) &
                     (positions < self.max[None, :] - h * self.dx[None, :])).all(dim=1)
 
-    def fidx(self, positions):
+    def fidx(self, positions: torch.Tensor) -> torch.Tensor:
         return (positions - self.min[None, :]) / self.dx
 
-    def threed_to_oned(self, i):
+    def threed_to_oned(self, i: torch.Tensor) -> torch.Tensor:
         i1d = (i[:, 0] * self.n[1] + i[:, 1]) * self.n[2] + i[:, 2]
         return i1d
 
-    def griddata_sparse(self, positions, weights=None):
-        gd = self.ingrid(positions)
-        fi = self.fidx(positions)
-        i = (fi + 0.5).type(torch.int64)
-        i = i[gd].t()
-        w = weights[gd]
-        self.data = torch.sparse.FloatTensor(i, w, size=self.n).to_dense()
-        return self.data
-
-    def griddata(self, positions, weights=None, method='nearest', fractional_update=1):
+    def griddata(self, positions: torch.Tensor, weights: torch.Tensor = None,
+                 method: str = 'nearest', fractional_update: float = 1.0):
         """Places data from positions onto grid using method='nearest'|'cic'
         where cic=cloud in cell. Returns gridded data and stores it as class attribute
         data"""
+
+        n_elements = reduce(lambda x, y: x * y, self.n)
         fi = self.fidx(positions)
-        nelements = reduce(lambda x, y: x * y, self.n)
         if method == 'nearest':
             gd = self.ingrid(positions)
         else:
             gd = self.ingrid(positions, h=0.5)
+
+        if weights is not None:
+            weights = weights[gd]
+        else:
+            weights = positions.new_ones(gd.sum())
+
         if gd.sum() == 0:
-            if fractional_update == 1:
-                self.data = positions.new_zeros(nelements)
-            else:
-                self.data.lerp_(positions.new_zeros(nelements), fractional_update)
+            self.data.lerp_(positions.new_zeros(self.n), fractional_update)
             return self.data
 
         if method == 'nearest':
             i = (fi + 0.5).type(torch.int64)
-            if weights is not None:
-                weights = weights[gd]
-
-            # bincount is fast but doesnt support autodiff
-            if weights is not None and weights.requires_grad:
-                if fractional_update == 1:
-                    self.data = torch.sparse.FloatTensor(i[gd].t(), weights, size=self.n).to_dense().reshape(
-                        self.n).type(dtype=positions.dtype)
-                else:
-                    self.data.lerp_(
-                        torch.sparse.FloatTensor(i[gd].t(), weights, size=self.n).to_dense().reshape(self.n).type(
-                            dtype=positions.dtype), fractional_update)
-            else:
-                if fractional_update == 1:
-                    self.data = torch.bincount(self.threed_to_oned(i[gd]), minlength=nelements,
-                                               weights=weights).reshape(
-                        self.n).type(dtype=positions.dtype)
-                else:
-                    self.data.lerp_(
-                        torch.bincount(self.threed_to_oned(i[gd]), minlength=nelements, weights=weights).reshape(
-                            self.n).type(
-                            dtype=positions.dtype), fractional_update)
-
-        if method == 'cic':
+            new_data = torch.sparse.FloatTensor(i[gd].t(), weights, size=self.n).to_dense().reshape(
+                self.n).type(dtype=positions.dtype)
+        elif method == 'cic':
             i = fi[gd, ...].floor()
             offset = fi[gd, ...] - i
             i = i.type(torch.int64)
-            if weights is None:
-                weights = positions.new_ones(gd.sum())
-            else:
-                weights = weights[gd]
-            self.data = weights.new_zeros(nelements)
-            if len(self.n) == 1:
-                self.data += torch.bincount(self.threed_to_oned(i), minlength=nelements,
-                                            weights=weights * (1 - offset))
-                self.data += torch.bincount(self.threed_to_oned(i + 1), minlength=nelements,
-                                            weights=weights * offset)
-            else:
-                twidle = torch.tensor([0, 1])
-                indexes = torch.cartesian_prod(*torch.split(twidle.repeat(3), 2))
-                for offsetdims in indexes:
-                    thisweights = torch.ones_like(weights)
-                    for dimi, offsetdim in enumerate(offsetdims):
-                        if offsetdim == 0:
-                            thisweights *= (1 - offset[..., dimi])
-                        if offsetdim == 1:
-                            thisweights *= offset[..., dimi]
-                    self.data += torch.bincount(self.threed_to_oned(i + offsetdims), minlength=nelements,
-                                                weights=thisweights * weights)
-            self.data = self.data.reshape(self.n)
+
+            new_data = weights.new_zeros(n_elements)
+            twidle = torch.tensor([0, 1])
+            indexes = torch.cartesian_prod(*torch.split(twidle.repeat(3), 2))
+            for offsetdims in indexes:
+                thisweights = torch.ones_like(weights)
+                for dimi, offsetdim in enumerate(offsetdims):
+                    if offsetdim == 0:
+                        thisweights *= (torch.tensor(1.0) - offset[..., dimi])
+                    if offsetdim == 1:
+                        thisweights *= offset[..., dimi]
+                new_data += torch.bincount(self.threed_to_oned(i + offsetdims), minlength=n_elements,
+                                           weights=thisweights * weights)
+            new_data = new_data.reshape(self.n)
+        else:
+            raise ValueError(f'Method {method} not recognised. Allowed values are nearest|cic')
+
+        self.data.lerp_(new_data, fractional_update)
         return self.data
 
 
 class ForceGrid(Grid):
-    def __init__(self, gridedges=torch.Tensor((10., 10., 10.)), n=(256, 256, 256),
-                 data=None, smoothing=1.0):
+    def __init__(self, grid_edges: Union[list, tuple, torch.Tensor] = torch.tensor((10., 10., 10.)),
+                 n: Union[list, tuple, torch.Tensor] = (256, 256, 256),
+                 data: torch.Tensor = None, smoothing: float = 1.0):
         self.greenfft = None
         self.pot = None
         self.acc = None
         self.epsilon = smoothing
-        super().__init__(gridedges, n, data)
+        super().__init__(grid_edges, n, data)
 
-    def to(self, device):
+    def to(self, device: Union[torch.device, str]) -> 'ForceGrid':
         if self.min.device == device:
             return self
         else:
-            gridedges = torch.stack((self.min, self.max), dim=1).to(device)
-            grid = ForceGrid(gridedges=gridedges, n=self.n, data=self.data.to(device))
+            grid_edges = torch.stack((self.min, self.max), dim=1).to(device)
+            grid = ForceGrid(grid_edges=grid_edges, n=self.n, data=self.data.to(device))
             if self.acc is not None: grid.acc = self.acc.to(device)
             if self.pot is not None: grid.pot = self.pot.to(device)
             return grid
 
     @staticmethod
-    def smoothing_pot(r, epsilon=1.):
+    def smoothing_pot(r: torch.Tensor, epsilon: float = 1.) -> torch.Tensor:
         """Taken from the manual of the Galaxy code by Jerry Sellwood."""
         x = r / epsilon
-        pot = -1 / r
+        pot = torch.as_tensor(-1.0) / r
         i = (x < 1)
-        pot[i] = (-1.4 + x[i] ** 2 * (2. / 3 - 0.3 * x[i] ** 2 + 0.1 * x[i] ** 3)) / epsilon
+        pot[i] = (-1.4 + x[i] ** 2 * (- 0.3 * x[i] ** 2 + 2. / 3 + 0.1 * x[i] ** 3)) / epsilon
         i = (x >= 1) & (x < 2)
-        pot[i] = (-1.6 + 1 / (15 * x[i]) + x[i] ** 2 * (4. / 3 - x[i] + 0.3 * x[i] ** 2 - x[i] ** 3 / 30)) / epsilon
+        pot[i] = (-1.6 + 1.0 / (15.0 * x[i]) + x[i] ** 2 * (4. / 3 - x[i] + 0.3 * x[i] ** 2 - x[i] ** 3 / 30)) / epsilon
         return pot
 
     @staticmethod
-    def complex_mul(a, b):
+    def complex_mul(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
         """Function to do complex multiplicatinos: Pytorch has no complex dtype but 
         stores complex numbers as an additional two long dimension"""
         return torch.stack([a[..., 0] * b[..., 0] - a[..., 1] * b[..., 1],
                             a[..., 0] * b[..., 1] + a[..., 1] * b[..., 0]], dim=-1)
 
-    def get_accelerations(self, positions):
+    def get_accelerations(self, positions: torch.Tensor) -> torch.Tensor:
         """Linear intepolate the gridded forces to the specified positions. This should be preceeded
         by a call to grid_acc to (re)compute the accelerations on the grid."""
         samples = (positions / self.max).unsqueeze(0).unsqueeze(2).unsqueeze(3)
@@ -184,7 +158,7 @@ class ForceGrid(Grid):
         image = image.unsqueeze(0)  # change to:  1 x C x W x H x D
         return torch.nn.functional.grid_sample(image, samples, mode='bilinear').squeeze().t()
 
-    def get_potential(self, positions):
+    def get_potential(self, positions: torch.Tensor) -> torch.Tensor:
         """Linear intepolate the gridded potential to the specified positions. This should be preceeded
         by a call to grid_acc to (re)compute the potential on the grid."""
         samples = (positions / self.max).unsqueeze(0).unsqueeze(2).unsqueeze(3)
@@ -192,7 +166,8 @@ class ForceGrid(Grid):
         image = image.unsqueeze(0).unsqueeze(0)  # change to:  1 x C x W x H x D - with C=1 for potential
         return torch.nn.functional.grid_sample(image, samples, mode='bilinear').squeeze().t()
 
-    def grid_accelerations(self, positions=None, weights=None, method='nearest'):
+    def grid_accelerations(self, positions: torch.Tensor = None, weights: torch.Tensor = None,
+                           method: str = 'nearest'):
         """Takes the brute force approach of removing periodic images by grid doubling in every dimension
         returns (pot, acc, greenfft) greenfft can be repassed and reused on the next call"""
         if positions is not None:
@@ -220,10 +195,10 @@ class ForceGrid(Grid):
 
         self.acc = self.pot.new_zeros(self.pot.shape + (3,))
         for dim in (0, 1, 2):
-            self.acc[..., dim] = -self.__diff(self.pot, dim, d=self.dx[dim])
+            self.acc[..., dim] = -self.__diff(self.pot, dim, d=self.dx[dim].item())
 
     @staticmethod
-    def __diff(vector, dim, d=1.0):
+    def __diff(vector: torch.Tensor, dim: int, d: float = 1.0) -> torch.Tensor:
         """Helper function for differentiating the potential to get the accelerations"""
         ret = (vector.roll(-1, dim) - vector.roll(1, dim)) / (2 * d)
         if dim == 0:
