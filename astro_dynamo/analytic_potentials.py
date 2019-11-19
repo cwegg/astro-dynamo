@@ -161,7 +161,7 @@ class SpheroidalPotential:
         samples = torch.stack((2 * torch.sqrt(positions[..., 0] ** 2 + positions[..., 1] ** 2) / self.r_max - 1,
                                positions[..., 2] / self.z_max), dim=-1)
         samples = samples.unsqueeze(0).unsqueeze(2)
-        return torch.nn.functional.grid_sample(self.grid, samples, mode='bilinear').squeeze().t()
+        return torch.nn.functional.grid_sample(self.grid, samples, mode='bilinear', align_corners=True).squeeze().t()
 
     def get_accelerations(self, positions):
         """Linear interpolate the gridded forces to the specified positions. This should be preceeded
@@ -253,10 +253,6 @@ def fit_spheroidal_function_to_snap(snap, rho_func, init_parms, m_range=(1, 20),
     vol = 4 * np.pi * (medge[1:] ** 3 - medge[:-1] ** 3) / 3 * volcorr
     mmid = 0.5 * (medge[1:] + medge[:-1])
     rho = mass / vol
-
-    def ein(m, rhor0, m0, alpha):
-        rho0 = rhor0 / (np.exp(-(2 / alpha) * ((8.2 / m0) ** alpha - 1)))
-        return rho0 * np.exp(-(2 / alpha) * ((m / m0) ** alpha - 1))
 
     (mass2, medge) = np.histogram(m, m_bins, weights=snap.dm.masses)
     Neff = mass ** 2 / mass2
