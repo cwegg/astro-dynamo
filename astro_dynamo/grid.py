@@ -61,7 +61,7 @@ class Grid:
         return i1d
 
     def grid_data(self, positions: torch.Tensor, weights: torch.Tensor = None,
-                  method: str = 'nearest', fractional_update: float = 1.0):
+                  method: str = 'nearest', fractional_update: float = 1.0) -> torch.Tensor:
         """Places data from positions onto grid using method='nearest'|'cic'
         where cic=cloud in cell. Returns gridded data and stores it as class attribute
         data"""
@@ -112,9 +112,11 @@ class Grid:
 
 
 class ForceGrid(Grid):
-    def __init__(self, grid_edges: Union[list, tuple, torch.Tensor] = torch.tensor((10., 10., 10.)),
+    def __init__(self,
+                 grid_edges: Union[list, tuple, torch.Tensor] = torch.tensor((10., 10., 10.)),
                  n: Union[list, tuple, torch.Tensor] = (256, 256, 256),
-                 data: torch.Tensor = None, smoothing: float = 1.0):
+                 data: torch.Tensor = None,
+                 smoothing: float = 1.0):
         self.greenfft = None
         self.pot = None
         self.acc = None
