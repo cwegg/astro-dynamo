@@ -1,6 +1,8 @@
 import torch
 import numpy as np
 import math
+import mwtools.nemo
+from astro_dynamo.snap import SnapShot, ParticleType
 
 
 def patternspeed(snap, rrange=(1, 4), n=range(2, 12, 2), combine=True, plot=None):
@@ -98,12 +100,14 @@ def align_bar(snap, max_r=5):
                          inplace=True)
 
 
-def barlen(snap, phaselim=None, fractional_m2=None):
+def barlen(snap, phaselim=None, fractional_m2=None, max_r=7):
     """Computes the bar length of a snapshot using either the point where the m=2 mode twists by phaselim,
     or the power in m=2/m=0 drops by fractional_m2 of its maximum."""
     barlens = ()
     rmid, surfdensft = bar_cyl_fft(snap)
-    m2 = np.abs(surfdensft[:, 2]) / np.abs(surfdensft[:, 0])
+    gd_i = (rmid < max_r)
+
+    m2 = np.abs(surfdensft[gd_i, 2]) / np.abs(surfdensft[gd_i, 0])
     ifid = np.argmax(m2)
     if phaselim is not None:
         # ang = np.cumsum(-0.5*np.angle(surfdensft[:, 2], deg=True)) / np.arange(1, len(surfdensft[:, 2]) + 1)
@@ -121,11 +125,24 @@ def interplen(r, vals, lim, ifid, comp='lt'):
     well into the bar to avoid e.g. finding an inner bar, when you wanted the outer."""
     if comp == 'lt':
         i = (vals > lim)  # bad points
-        i = np.min(i.nonzero()[0][i.nonzero()[0] > ifid])
     else:
         i = (vals < lim)  # bad points
-        i = np.min(i.nonzero()[0][i.nonzero()[0] > ifid])
-    r0, val0 = r[i], vals[i]
-    r1, val1 = r[i - 1], vals[i - 1]
+    in_bar_i = i.nonzero()[0][i.nonzero()[0] > ifid]
+    if len(in_bar_i) == 0:
+        return np.nan
+    last_i = np.min(in_bar_i)
+    r0, val0 = r[last_i], vals[last_i]
+    r1, val1 = r[last_i - 1], vals[last_i - 1]
     thisbarlen = r1 * (val0 - lim) / (val0 - val1) + r0 * (lim - val1) / (val0 - val1)
     return thisbarlen
+
+
+def read_nemo_snapshot(filename, time=1000, nstars=500000):
+    """Loads a nemo snapshot at time into a astro_dynamo snapshot.
+    Requires the number of stars to be specified. These are assumed to be the """
+    _, snap = mwtools.nemo.readsnap(filename, times=time)
+    particle_type = torch.full((snap.shape[1],), ParticleType.Star, dtype=torch.uint8)
+    particle_type[nstars:] = ParticleType.DarkMatter
+    snap = SnapShot(positions=snap[0, :, 0:3], velocities=snap[0, :, 3:6],
+                    masses=snap[0, :, 6], particle_type=particle_type)
+    return snap
