@@ -1,118 +1,45 @@
-import torch
 import math
-import numpy as np
-from enum import IntFlag
-from torch.utils.data import WeightedRandomSampler
 
-float_dtype = torch.float32
-
-class ParticleType(IntFlag):
-    """Enum for storing particle type: Gas, Star, DarkMatter"""
-    # If the values are changed then SnapShot.__organise will need updating
-    DarkMatter = 1
-    Gas = 2
-    Star = 4
-    Baryonic = 6
+import mwtools.nemo
+import torch
+import torch.nn as nn
 
 
-class SnapShot:
-    def __init__(self, file=None, positions=None, velocities=None,
-                 masses=None, particle_type=None, time=0., omega=0., dt=None,
-                 particle_type_mapping=None):
-        if file is None and (positions is None or velocities is None or masses is None):
-            raise TypeError('Need either a snapshot to load, or positions, velocities and masses.')
-        if positions is not None:
-            self.positions = torch.as_tensor(positions)
-            self.velocities = torch.as_tensor(velocities)
-            self.masses = torch.as_tensor(masses)
-        if file is not None:
-            snap = torch.tensor(np.loadtxt(file), dtype=float_dtype)
-            self.positions = snap[:, 0:3]
-            self.velocities = snap[:, 3:6]
-            self.masses = snap[:, 6]
-            if snap.shape[1] >= 8:
-                particle_type = snap[:, 7].type(torch.uint8)
-                if particle_type_mapping is not None:
-                    mapped_particle_type = torch.zeros_like(particle_type)
-                    for key, value in particle_type_mapping.items():
-                        mapped_particle_type.masked_fill_(particle_type == key, value)
-                    particle_type = mapped_particle_type
-        if particle_type is None:
-            particle_type = torch.full(self.masses.shape, ParticleType.Star, dtype=torch.uint8)
-        self.__particletype = particle_type
-        self.time = torch.as_tensor(time)
-        self.omega = torch.as_tensor(omega)
-        self.n = len(self.masses)
-        self.dt = dt
-        if self.dt is None:
-            self.dt = torch.full(self.masses.shape, float('inf'), dtype=self.positions.dtype)
-        self.starrange = None
-        self.dmrange = None
-        self.gasrange = None
+class SnapShot(nn.Module):
+    def __init__(self, positions=None, velocities=None,
+                 masses=None, time=0., omega=0., dt=None):
+        super(SnapShot, self).__init__()
 
-    def to(self, device):
-        """Moves the snapshot to the specified device. If already on the device returns self, otherwise returns a new
-        SnapShot on the device."""
-        if self.positions.device == device:
-            return self
-        else:
-            newsnap = SnapShot(positions=self.positions.to(device),
-                               velocities=self.velocities.to(device),
-                               masses=self.masses.to(device),
-                               particle_type=self.particletype.to(device),
-                               dt=self.dt.to(device),
-                               time=self.time.to(device), omega=self.omega.to(device))
-            newsnap.dmrange = self.dmrange
-            newsnap.starrange = self.starrange
-            newsnap.gasrange = self.gasrange
-            return newsnap
+        # Masses are registered as parameters i.e. something for pytorch to optimise
+        # positions, velocities and everything else are buffers i.e. they are the internal state of the model, but
+        # shouldn't be optimised
+        self.logmasses = nn.Parameter(masses.log())
+        self.register_buffer('positions', torch.as_tensor(positions))
+        self.register_buffer('velocities', torch.as_tensor(velocities))
+        self.register_buffer('time', torch.as_tensor(time))
+        self.register_buffer('omega', torch.as_tensor(omega))
+        if dt is None:
+            dt = torch.full(self.masses.shape, float('inf'), dtype=self.positions.dtype,
+                            device=self.masses.device)
+
+        self.register_buffer('dt', torch.as_tensor(dt))
+
+    @property
+    def masses(self):
+        return self.logmasses.exp()
+
+    def extra_repr(self):
+        return f'n_particles={self.n}'
 
     def as_numpy_array(self):
-        """Returns as a nmagic type matricx of dimension [:,7] with positions at [:,1:4], velocities at [:,4:7] and
+        """Returns as a nmagic type matrix of dimension [:,7] with positions at [:,1:4], velocities at [:,4:7] and
         masses at [:,7]"""
-        martrix = torch.cat((self.positions, self.velocities, self.masses.unsqueeze(dim=1)), dim=1)
-        return martrix.to(torch.device('cpu')).numpy()
-
-
-    def __organise(self):
-        """We sort the particles by type. This improves speed because then we can just take a slice of the snapshot
-        when we want stars/gas/dm."""
-        ind = torch.argsort(self.__particletype, descending=True)
-        self.positions = self.positions[ind, :]
-        self.velocities = self.velocities[ind, :]
-        self.masses = self.masses[ind]
-        self.__particletype = self.__particletype[ind]
-        counts = torch.bincount(self.__particletype, minlength=int(max(ParticleType)))
-        self.starrange = (0, counts[ParticleType.Star])
-        self.gasrange = (self.starrange[1], self.starrange[1] + counts[ParticleType.Gas])
-        self.dmrange = (self.gasrange[1], self.gasrange[1] + counts[ParticleType.DarkMatter])
+        matrix = torch.cat((self.positions, self.velocities, self.masses.detach().unsqueeze(dim=1)), dim=1)
+        return matrix.to(torch.device('cpu')).numpy()
 
     @property
-    def particletype(self):
-        return self.__particletype
-
-    @particletype.setter
-    def particletype(self, particletype):
-        self.__particletype = particletype
-        self.__organise()
-
-    @property
-    def dm(self):
-        if self.dmrange is None:
-            self.__organise()
-        return self[self.dmrange[0]:self.dmrange[1]]
-
-    @property
-    def gas(self):
-        if self.gasrange is None:
-            self.__organise()
-        return self[self.gasrange[0]:self.gasrange[1]]
-
-    @property
-    def stars(self):
-        if self.starrange is None:
-            self.__organise()
-        return self[self.starrange[0]:self.starrange[1]]
+    def n(self):
+        return self.masses.shape[-1]
 
     @property
     def x(self):
@@ -157,7 +84,6 @@ class SnapShot:
         newsnap = SnapShot(positions=self.positions[i, :],
                            velocities=self.velocities[i, :],
                            masses=self.masses[i],
-                           particle_type=self.particletype[i],
                            time=self.time, omega=self.omega)
         if self.dt is not None:
             newsnap.dt = self.dt[i]
@@ -280,7 +206,7 @@ class SnapShot:
         Integrate the snapshot for a set number of timesteps. Because the timestep is so there are stepsperorbit steps
         for each orbit (roughly) then this corresponds to integrating for roughly steps/stepsperorbit orbits.
 
-        There are two reasons for prefering this over integrating for a length of time:
+        There are two reasons for prefering this over the integrate method (which integrates for a length of time):
             - When fitting dynamical models we want all regions to be in equilibrium, regardless of orbital time, so
               we are limited by the longest timescale outer regions, and spend most of our time integrating the short
               timescale inner regions.
@@ -360,15 +286,14 @@ class SnapShot:
         one copy then then the daughter particles are sampled along the orbit and given a small velocity perturbation
         of fraction velocity_perturbation (default 0.01) in the rotating frame."""
 
-        gd = self.ingrid(potentials, self.positions).nonzero()[:, 0]
-        i = torch.multinomial(self.masses[gd], self.n, replacement=True).sort().values
+        gd = self.ingrid(potentials, self.positions).nonzero()[:, 0]  # only re-sample particles which are on-grid
 
-        # copy the resampled positions - the first copy of each particle is the parent particle and will
-        # remain unchanged
+        # resample and copy the resampled particles properties - the first copy of each particle is the parent particle
+        # and will remain unchanged
+        i = torch.multinomial(self.masses[gd], self.n, replacement=True).sort().values
         self.positions.copy_(self.positions[gd[i], :])
         self.velocities.copy_(self.velocities[gd[i], :])
         self.masses.fill_(self.masses[gd].sum() / self.n)
-        # self.dt.fill_(1.0)
         self.dt.copy_(self.dt[gd[i]])
 
         accelerations = self.get_accelerations(potentials, self.positions)
@@ -396,3 +321,56 @@ class SnapShot:
                 self.velocities[children, 1] + self.omega * self.positions[children, 0])
         self.velocities[children, 2] += velocity_perturbation * torch.randn_like(self.velocities[children, 2]) * \
                                         self.velocities[children, 2]
+
+
+def read_nemo_snapshot(filename, time=1000, stars=range(0, 500000), dm=range(500000, 1000000),
+                       dtype=torch.float, device=None, flip=True):
+    """Loads a nemo snapshot at time into a astro_dynamo snapshot.
+    Requires the number of stars to be specified. These are assumed to be the first particles. """
+    _, snap = mwtools.nemo.readsnap(filename, times=time)
+    snaps = []
+    if stars is not None:
+        snaps += [SnapShot(positions=torch.as_tensor(snap[0, stars, 0:3], dtype=dtype, device=device),
+                           velocities=torch.as_tensor(snap[0, stars, 3:6], dtype=dtype, device=device),
+                           masses=torch.as_tensor(snap[0, stars, 6], dtype=dtype, device=device))]
+    if dm is not None:
+        snaps += [SnapShot(positions=torch.as_tensor(snap[0, dm, 0:3], dtype=dtype, device=device),
+                           velocities=torch.as_tensor(snap[0, dm, 3:6], dtype=dtype, device=device),
+                           masses=torch.as_tensor(snap[0, dm, 6], dtype=dtype, device=device))]
+    if flip:
+        for snap in snaps:
+            snap.velocities = -snap.velocities
+
+    return tuple(snaps)
+
+
+def read_ascii_snapshot(filename, particle_types=None, dtype=torch.float, device=None):
+    """Loads a nemo snapshot at time into a astro_dynamo snapshot.
+    Requires the number of stars to be specified. These are assumed to be the first particles. """
+    snap = np.loadtxt(filename)
+    if particle_types is None:
+        particle_types = np.unique(snap[:, 7])
+
+    snaps = []
+    for particle_type in particle_types:
+        i = (snap[:, 7] == particle_type)
+        if i.sum() > 0:
+            snap = SnapShot(positions=torch.as_tensor(snap[i, 0:3], dtype=dtype, device=device),
+                            velocities=torch.as_tensor(snap[i, 3:6], dtype=dtype, device=device),
+                            masses=torch.as_tensor(snap[i, 6], dtype=dtype, device=device))
+        else:
+            snap = None
+        snaps += [snap]
+    return tuple(snaps)
+
+
+def symmetrize_snap(snap, axis=2):
+    """Symmetrize the snapshot about axis (default 2 which is z).
+    We do this by doubling the snap shot, with the send set of particles being copies under
+    positions[:,axis] -> -positions[:,axis] and velocities[:,axis] -> -velocities[:,axis] """
+    new_positions = torch.cat((snap.positions, snap.positions), dim=0)
+    new_positions[new_positions.shape[0] // 2:, axis] = -new_positions[new_positions.shape[0] // 2:, axis]
+    new_velocities = torch.cat((snap.velocities, snap.velocities), dim=0)
+    new_velocities[new_velocities.shape[0] // 2:, axis] = -new_velocities[new_velocities.shape[0] // 2:, axis]
+    new_masses = torch.cat((snap.masses.detach() / 2, snap.masses.detach() / 2), dim=0)
+    return SnapShot(positions=new_positions, velocities=new_velocities, masses=new_masses)

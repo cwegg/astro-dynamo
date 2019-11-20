@@ -1,33 +1,40 @@
+from functools import reduce
+from typing import Union
+
 import torch
 import torch.sparse
-from typing import Union
-from functools import reduce
+from torch import nn
 
-class Grid:
+
+class Grid(nn.Module):
     """Class for gridding data. Assumes grids are symmertic about zero."""
 
     def __init__(self, grid_edges: torch.Tensor = torch.tensor((10., 10., 10.)),
                  n: Union[list, tuple] = (256, 256, 256),
                  data: torch.Tensor = None):
-        self.n = n
+        super(Grid, self).__init__()
         if grid_edges.dim() == 1:
-            self.min = -grid_edges
-            self.max = grid_edges
+            grid_min = -grid_edges
+            grid_max = grid_edges
         else:
-            self.min = grid_edges[..., 0]
-            self.max = grid_edges[..., 1]
-        self.dx = (self.max - self.min) / (self.max.new_tensor(n) - 1)
+            grid_min = grid_edges[..., 0]
+            grid_max = grid_edges[..., 1]
+        dx = (grid_max - grid_min) / (grid_max.new_tensor(n) - 1)
         if data is None:
-            data = grid_edges.new_zeros(self.n)
-        self.data = data
+            data = grid_edges.new_zeros(n)
 
-    def to(self, device):
-        if self.min.device == device:
-            return self
-        else:
-            grid_edges = torch.stack((self.min, self.max), dim=1).to(device)
-            data = self.data.to(device)
-            return Grid(grid_edges=grid_edges, n=self.n, data=data)
+        self.register_buffer('dx', dx)
+        self.register_buffer('min', grid_min)
+        self.register_buffer('max', grid_max)
+        self.register_buffer('data', data)
+
+    def extra_repr(self):
+        return f'min={self.min}, max={self.max}, size={self.data.shape}'
+
+    @property
+    def n(self):
+        """Returns grid size"""
+        return self.data.shape
 
     @property
     def x(self) -> torch.Tensor:
@@ -79,10 +86,8 @@ class Grid:
             weights = positions.new_ones(gd.sum())
 
         if gd.sum() == 0:
-            self.data.lerp_(positions.new_zeros(self.n), fractional_update)
-            return self.data
-
-        if method == 'nearest':
+            new_data = positions.new_zeros(self.n)
+        elif method == 'nearest':
             i = (fi + 0.5).type(torch.int64)
             new_data = torch.sparse.FloatTensor(i[gd].t(), weights, size=self.n).to_dense().reshape(
                 self.n).type(dtype=positions.dtype)
@@ -92,7 +97,7 @@ class Grid:
             i = i.type(torch.int64)
 
             new_data = weights.new_zeros(n_elements)
-            twidle = torch.tensor([0, 1])
+            twidle = torch.tensor([0, 1], device=i.device)
             indexes = torch.cartesian_prod(*torch.split(twidle.repeat(3), 2))
             for offsetdims in indexes:
                 thisweights = torch.ones_like(weights)
@@ -117,11 +122,12 @@ class ForceGrid(Grid):
                  n: Union[list, tuple, torch.Tensor] = (256, 256, 256),
                  data: torch.Tensor = None,
                  smoothing: float = 1.0):
+        super().__init__(grid_edges, n, data)
+
         self.greenfft = None
         self.pot = None
-        self.acc = None
         self.epsilon = smoothing
-        super().__init__(grid_edges, n, data)
+        self.register_buffer('acc', acc)
 
     def to(self, device: Union[torch.device, str]) -> 'ForceGrid':
         if self.min.device == device:
@@ -193,8 +199,8 @@ class ForceGrid(Grid):
         rhofft = ForceGrid.complex_mul(rhofft, self.greenfft)
         self.pot = torch.irfft(rhofft, 3, onesided=False)
         del rhofft
-        self.pot = self.pot[nx:, ny:, nz:]
 
+        self.pot = self.pot[nx:, ny:, nz:]
         self.acc = self.pot.new_zeros(self.pot.shape + (3,))
         for dim in (0, 1, 2):
             self.acc[..., dim] = -self.__diff(self.pot, dim, d=self.dx[dim].item())

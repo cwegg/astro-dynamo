@@ -1,10 +1,12 @@
-import torch
 import math
-from scipy.special import roots_legendre
+from typing import Callable
+
+import matplotlib.pylab as plt
 import numpy as np
 import scipy.optimize
-import matplotlib.pylab as plt
-from typing import Callable
+import torch
+from scipy.special import roots_legendre
+from torch import nn
 
 
 # Functions fixed_quad and _cached_roots_legendre are adapted from scipy but adapted to pytorch, and the case of
@@ -38,21 +40,17 @@ def fixed_quad(func: Callable[[torch.tensor], torch.tensor], n: int = 5, dtype: 
     return torch.sum(w.to(dtype=dtype, device=device) * func(y.to(dtype=dtype, device=device)), axis=-1)
 
 
-class SpheroidalPotential:
+class SpheroidalPotential(nn.Module):
     def __init__(self, rho_func: Callable[[torch.tensor], torch.tensor], q: torch.tensor = torch.tensor([1.0])):
-        self.q = torch.as_tensor(q)
+        super(SpheroidalPotential, self).__init__()
         self.rho = rho_func
-        self.grid = None
-        self.r_max, self.z_max = None, None
+        self.register_buffer('q', torch.as_tensor(q))
+        self.register_buffer('r_max', torch.as_tensor(q))
+        self.register_buffer('z_max', torch.as_tensor(q))
+        self.register_buffer('grid', torch.zeros((512, 1024)))
 
-    def to(self, device=None, dtype=None, *args, **kwargs) -> 'SpheroidalPotential':
-        if (dtype is None or self.q.dtype == dtype) and (device is None or self.q.device == device):
-            return self
-        else:
-            new_pot = SpheroidalPotential(self.rho, q=self.q.to(device=device, dtype=dtype, *args, **kwargs))
-            if self.grid is not None: new_pot.grid = self.grid.to(device=device, dtype=dtype, *args, **kwargs)
-            new_pot.r_max, new_pot.z_max = self.r_max, self.z_max
-            return new_pot
+    def extra_repr(self):
+        return f'q={self.q}, r_max={self.r_max}, z_max={self.z_max}, grid={self.grid.shape}'
 
     def _f_compute(self, r_cyl: torch.tensor, z: torch.tensor, rel_tol: float = 1e-6, direction: str = 'r_cyl', *args,
                    **kwargs) -> torch.tensor:
@@ -149,7 +147,7 @@ class SpheroidalPotential:
         by a call to grid_acc to (re)compute the accelerations on the grid."""
         r = torch.linspace(0, r_max, r_bins, device=self.q.device)
         z = torch.linspace(-z_max, z_max, z_bins, device=self.q.device)
-        self.r_max, self.z_max = r_max, z_max
+        self.r_max, self.z_max = torch.as_tensor(r_max), torch.as_tensor(z_max)
         f_r_cyl = self.f_r_cyl(r, z.unsqueeze(-1))
         f_z = self.f_z(r, z.unsqueeze(-1))
         self.grid = torch.stack((f_r_cyl, f_z)).unsqueeze(0)  # .permute(0,1,3,2)
@@ -182,7 +180,8 @@ def fit_q_slice_to_snapshot(snap):
     is reasonable (it will also fail for very flattened systems). Returns (q,qerr)"""
     st = snap.z / snap.r
     mintheta = np.sin(30. / 180 * np.pi)
-    mass, edges = np.histogram(st ** 2, np.linspace(mintheta ** 2, 1, 100), weights=snap.masses)
+    masses = snap.masses.detach().cpu().numpy()
+    mass, edges = np.histogram(st ** 2, np.linspace(mintheta ** 2, 1, 100), weights=masses)
     x = 0.5 * (edges[:-1] + edges[1:])
     ctedges = 1 - np.sqrt(edges)
     vol = ctedges[:-1] - ctedges[1:]
@@ -191,7 +190,9 @@ def fit_q_slice_to_snapshot(snap):
     def f(x, a, b):
         return a * (b * x + 1)
 
-    mass2, edges = np.histogram(st ** 2, np.linspace(mintheta ** 2, 1, 100), weights=snap.masses ** 2)
+    mass2, edges = np.histogram(st ** 2, np.linspace(mintheta ** 2, 1, 100), weights=masses)
+    gd = (mass > 0)
+    mass, mass2, rho, x = mass[gd], mass2[gd], rho[gd], x[gd]
     Neff = mass ** 2 / mass2
     popt, pcov = scipy.optimize.curve_fit(f, x, rho, p0=[-0.8, 1.0], sigma=rho / np.sqrt(Neff))
     perr = np.sqrt(np.diag(pcov))
@@ -207,10 +208,11 @@ def fit_q_to_snapshot(snap, r_range=(1, 20), r_bins=10, plot=False):
     r_bins = np.linspace(r_range[0], r_range[1], r_bins)
     qs, qerrs = np.zeros(len(r_bins) - 1), np.zeros(len(r_bins) - 1)
     for ir in range(len(r_bins) - 1):
-        snap_slice = snap.dm[(snap.dm.r > r_bins[ir]) & (snap.dm.r <= r_bins[ir + 1])]
+        snap_slice = snap[(snap.r > r_bins[ir]) & (snap.r <= r_bins[ir + 1])]
         qs[ir], qerrs[ir] = fit_q_slice_to_snapshot(snap_slice)
-    q = np.sum(qs / qerrs ** 2) / np.sum(1 / qerrs ** 2)
-    qerr = 1 / np.sqrt(np.sum(1 / qerrs ** 2))
+    gd = np.isfinite(qs)
+    q = np.sum(qs[gd] / qerrs[gd] ** 2) / np.sum(1 / qerrs[gd] ** 2)
+    qerr = 1 / np.sqrt(np.sum(1 / qerrs[gd] ** 2))
     if plot:
         f, ax = plt.subplots()
         r = 0.5 * (r_bins[:-1] + r_bins[1:])
@@ -244,17 +246,17 @@ def fit_spheroidal_function_to_snap(snap, rho_func, init_parms, m_range=(1, 20),
     Set plot=True to compare fit to the snapshot."""
     if q is None:
         q, qerr = fit_q_to_snapshot(snap, r_range=m_range, r_bins=m_bins)
-
+    masses = snap.masses.detach().cpu().numpy()
     m = np.sqrt((snap.rcyl) ** 2 + (snap.z / q) ** 2)
     m_bins = np.linspace(m_range[0], m_range[1], m_bins)
-    (mass, medge) = np.histogram(m, m_bins, weights=snap.masses)
+    (mass, medge) = np.histogram(m, m_bins, weights=masses)
 
     volcorr = q
     vol = 4 * np.pi * (medge[1:] ** 3 - medge[:-1] ** 3) / 3 * volcorr
     mmid = 0.5 * (medge[1:] + medge[:-1])
     rho = mass / vol
 
-    (mass2, medge) = np.histogram(m, m_bins, weights=snap.dm.masses)
+    (mass2, medge) = np.histogram(m, m_bins, weights=masses)
     Neff = mass ** 2 / mass2
     rho_numpy = lambda x, *args, **kwargs: rho_func(x, *args, **kwargs).cpu().numpy()
     popt, pcov = scipy.optimize.curve_fit(rho_numpy, mmid, rho, p0=init_parms, sigma=rho / np.sqrt(Neff))

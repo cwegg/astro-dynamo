@@ -1,8 +1,7 @@
-import torch
-import numpy as np
 import math
-import mwtools.nemo
-from astro_dynamo.snap import SnapShot, ParticleType
+
+import numpy as np
+import torch
 
 
 def patternspeed(snap, rrange=(1, 4), n=range(2, 12, 2), combine=True, plot=None):
@@ -69,8 +68,8 @@ def bar_cyl_fft(snap, rbins=None, phibins=None, weights=(None,)):
             totalweight = snap.masses
         else:
             totalweight = snap.masses * weight
-        h, redges, phiedges = np.histogram2d(rcyl.cpu().numpy(), phi.cpu().numpy(), (rbins, phibins),
-                                             weights=totalweight.cpu())
+        h, redges, phiedges = np.histogram2d(rcyl.detach().cpu().numpy(), phi.detach().cpu().numpy(), (rbins, phibins),
+                                             weights=totalweight.detach().cpu().numpy())
         area = 0.5 * (redges[1:, np.newaxis] ** 2 - redges[:-1, np.newaxis] ** 2) * (
                 phiedges[np.newaxis, 1:] - phiedges[np.newaxis, :-1])
         surfdens = h / area
@@ -95,7 +94,7 @@ def compute_bar_angle(snap, max_r=5, deg=True):
 def align_bar(snap, max_r=5):
     """Rotates the bar so that it is aligned to the x-axis. Specifically the m=2 mode is rotated to lie along the x-axis
     at its maximum"""
-    bar_angle = compute_bar_angle(snap, max_r=5, deg=False)
+    bar_angle = compute_bar_angle(snap, max_r=max_r, deg=False)
     _ = snap.rotate_snap([-bar_angle], snap.positions, snap.velocities, deg=False,
                          inplace=True)
 
@@ -135,14 +134,3 @@ def interplen(r, vals, lim, ifid, comp='lt'):
     r1, val1 = r[last_i - 1], vals[last_i - 1]
     thisbarlen = r1 * (val0 - lim) / (val0 - val1) + r0 * (lim - val1) / (val0 - val1)
     return thisbarlen
-
-
-def read_nemo_snapshot(filename, time=1000, nstars=500000):
-    """Loads a nemo snapshot at time into a astro_dynamo snapshot.
-    Requires the number of stars to be specified. These are assumed to be the """
-    _, snap = mwtools.nemo.readsnap(filename, times=time)
-    particle_type = torch.full((snap.shape[1],), ParticleType.Star, dtype=torch.uint8)
-    particle_type[nstars:] = ParticleType.DarkMatter
-    snap = SnapShot(positions=snap[0, :, 0:3], velocities=snap[0, :, 3:6],
-                    masses=snap[0, :, 6], particle_type=particle_type)
-    return snap

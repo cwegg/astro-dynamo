@@ -1,7 +1,8 @@
-import torch
 import math
-import numpy as np
 from abc import ABC, abstractmethod
+
+import numpy as np
+import torch
 
 
 class Target(ABC):
@@ -70,7 +71,7 @@ class RadialProfile(Target):
 
     def interpolate_surface_density(self, snap, r):
         my_r = self.rmid.cpu().numpy()
-        my_surface_density = self.observe(snap).cpu().numpy()
+        my_surface_density = self.observe(snap).detach().cpu().numpy()
         interpolated_surface_density = torch.as_tensor(np.interp(r, my_r, my_surface_density), device=self.device)
         return interpolated_surface_density
 
