@@ -10,9 +10,8 @@ class Grid(nn.Module):
     """Class for gridding data. Assumes grids are symmertic about zero."""
 
     def __init__(self, grid_edges: torch.Tensor = torch.tensor((10., 10., 10.)),
-                 n: Union[list, tuple] = (256, 256, 256),
-                 data: torch.Tensor = None):
-        super(Grid, self).__init__()
+                 n: Union[list, tuple] = (256, 256, 256)):
+        super().__init__()
         if grid_edges.dim() == 1:
             grid_min = -grid_edges
             grid_max = grid_edges
@@ -20,16 +19,16 @@ class Grid(nn.Module):
             grid_min = grid_edges[..., 0]
             grid_max = grid_edges[..., 1]
         dx = (grid_max - grid_min) / (grid_max.new_tensor(n) - 1)
-        if data is None:
-            data = grid_edges.new_zeros(n)
-
         self.register_buffer('dx', dx)
+        self.register_buffer('n', torch.as_tensor(n, dtype=torch.long))
         self.register_buffer('min', grid_min)
         self.register_buffer('max', grid_max)
-        self.register_buffer('data', data)
+
+    def forward(self, snap):
+        return self.grid_data(snap.positions, weights=snap.masses, method='nearest')
 
     def extra_repr(self):
-        return f'min={self.min}, max={self.max}, size={self.data.shape}'
+        return f'min={self.min}, max={self.max}, size={self.n}'
 
     @property
     def n(self):
@@ -39,17 +38,17 @@ class Grid(nn.Module):
     @property
     def x(self) -> torch.Tensor:
         """Returns grid points in first dimension"""
-        return torch.linspace(self.min[0].item(), self.max[0].item(), self.n[0])
+        return torch.linspace(self.min[0].item(), self.max[0].item(), self.n[0].item())
 
     @property
     def y(self) -> torch.Tensor:
         """Returns grid points in second dimension"""
-        return torch.linspace(self.min[1].item(), self.max[1].item(), self.n[1])
+        return torch.linspace(self.min[1].item(), self.max[1].item(), self.n[1].item())
 
     @property
     def z(self) -> torch.Tensor:
         """Returns grid points in third dimension"""
-        return torch.linspace(self.min[2].item(), self.max[2].item(), self.n[2])
+        return torch.linspace(self.min[2].item(), self.max[2].item(), self.n[2].item())
 
     def ingrid(self, positions: torch.Tensor, h: float = None) -> torch.Tensor:
         """Test if positions are in the grid"""
@@ -64,16 +63,16 @@ class Grid(nn.Module):
         return (positions - self.min[None, :]) / self.dx
 
     def _threed_to_oned(self, i: torch.Tensor) -> torch.Tensor:
-        i1d = (i[:, 0] * self.n[1] + i[:, 1]) * self.n[2] + i[:, 2]
+        i1d = (i[:, 0] * self.n[1].item() + i[:, 1]) * self.n[2].item() + i[:, 2]
         return i1d
 
     def grid_data(self, positions: torch.Tensor, weights: torch.Tensor = None,
-                  method: str = 'nearest', fractional_update: float = 1.0) -> torch.Tensor:
+                  method: str = 'nearest') -> torch.Tensor:
         """Places data from positions onto grid using method='nearest'|'cic'
         where cic=cloud in cell. Returns gridded data and stores it as class attribute
         data"""
-
-        n_elements = reduce(lambda x, y: x * y, self.n)
+        dimensions = tuple(self.n)
+        n_elements = reduce(lambda x, y: x * y, dimensions)
         fi = self._float_idx(positions)
         if method == 'nearest':
             gd = self.ingrid(positions)
@@ -86,17 +85,17 @@ class Grid(nn.Module):
             weights = positions.new_ones(gd.sum())
 
         if gd.sum() == 0:
-            new_data = positions.new_zeros(self.n)
+            data = positions.new_zeros(dimensions)
         elif method == 'nearest':
             i = (fi + 0.5).type(torch.int64)
-            new_data = torch.sparse.FloatTensor(i[gd].t(), weights, size=self.n).to_dense().reshape(
-                self.n).type(dtype=positions.dtype)
+            data = torch.sparse.FloatTensor(i[gd].t(), weights, size=dimensions).to_dense().reshape(dimensions).type(
+                dtype=positions.dtype)
         elif method == 'cic':
             i = fi[gd, ...].floor()
             offset = fi[gd, ...] - i
             i = i.type(torch.int64)
 
-            new_data = weights.new_zeros(n_elements)
+            data = weights.new_zeros(n_elements)
             twidle = torch.tensor([0, 1], device=i.device)
             indexes = torch.cartesian_prod(*torch.split(twidle.repeat(3), 2))
             for offsetdims in indexes:
@@ -106,38 +105,37 @@ class Grid(nn.Module):
                         thisweights *= (torch.tensor(1.0) - offset[..., dimi])
                     if offsetdim == 1:
                         thisweights *= offset[..., dimi]
-                new_data += torch.bincount(self._threed_to_oned(i + offsetdims), minlength=n_elements,
-                                           weights=thisweights * weights)
-            new_data = new_data.reshape(self.n)
+                data += torch.bincount(self._threed_to_oned(i + offsetdims), minlength=n_elements,
+                                       weights=thisweights * weights)
+            data = data.reshape(dimensions)
         else:
             raise ValueError(f'Method {method} not recognised. Allowed values are nearest|cic')
 
-        self.data.lerp_(new_data, fractional_update)
-        return self.data
+        return data
 
 
 class ForceGrid(Grid):
     def __init__(self,
                  grid_edges: Union[list, tuple, torch.Tensor] = torch.tensor((10., 10., 10.)),
                  n: Union[list, tuple, torch.Tensor] = (256, 256, 256),
-                 data: torch.Tensor = None,
+                 rho: torch.Tensor = None,
                  smoothing: float = 1.0):
-        super().__init__(grid_edges, n, data)
-
+        super().__init__(grid_edges, n)
         self.greenfft = None
-        self.pot = None
-        self.epsilon = smoothing
-        self.register_buffer('acc', acc)
+        self.register_buffer('epsilon', torch.as_tensor(smoothing))
+        self.register_buffer('acc', None)
+        self.register_buffer('pot', None)
+        if rho is None:
+            rho = self.min.new_zeros(tuple(n))
+        self.register_buffer('rho', rho)
 
-    def to(self, device: Union[torch.device, str]) -> 'ForceGrid':
-        if self.min.device == device:
-            return self
+    def update_density(self, positions: torch.Tensor, weights: torch.Tensor = None,
+                       method: str = 'nearest', fractional_update: float = 1.0) -> None:
+        new_data = self.grid_data(positions, weights, method)
+        if fractional_update == 1.0:
+            self.rho = new_data
         else:
-            grid_edges = torch.stack((self.min, self.max), dim=1).to(device)
-            grid = ForceGrid(grid_edges=grid_edges, n=self.n, data=self.data.to(device))
-            if self.acc is not None: grid.acc = self.acc.to(device)
-            if self.pot is not None: grid.pot = self.pot.to(device)
-            return grid
+            self.rho.lerp_(new_data, fractional_update)
 
     @staticmethod
     def smoothing_pot(r: torch.Tensor, epsilon: float = 1.) -> torch.Tensor:
@@ -179,14 +177,15 @@ class ForceGrid(Grid):
                            method: str = 'nearest'):
         """Takes the brute force approach of removing periodic images by grid doubling in every dimension."""
         if positions is not None:
-            self.grid_data(positions, weights, method)
-        rho = self.data
+            self.update_density(positions, weights, method)
+        rho = self.rho
         nx, ny, nz = rho.shape[0], rho.shape[1], rho.shape[2]
 
         padrho = rho.new_zeros([2 * nx, 2 * ny, 2 * nz])
         padrho[0:nx, 0:ny, 0:nz] = rho
 
-        if self.greenfft is None or padrho.shape != self.greenfft.shape[:-1]:
+        if self.greenfft is None or padrho.shape != self.greenfft.shape[:-1] or \
+                self.greenfft.device != rho.device or self.greenfft.dtype != rho.dtype:
             x = torch.arange(-nx, nx, dtype=rho.dtype, device=rho.device) * self.dx[0]
             y = torch.arange(-ny, ny, dtype=rho.dtype, device=rho.device) * self.dx[1]
             z = torch.arange(-nz, nz, dtype=rho.dtype, device=rho.device) * self.dx[2]

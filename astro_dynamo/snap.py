@@ -291,15 +291,17 @@ class SnapShot(nn.Module):
         # resample and copy the resampled particles properties - the first copy of each particle is the parent particle
         # and will remain unchanged
         i = torch.multinomial(self.masses[gd], self.n, replacement=True).sort().values
-        self.positions.copy_(self.positions[gd[i], :])
-        self.velocities.copy_(self.velocities[gd[i], :])
-        self.masses.fill_(self.masses[gd].sum() / self.n)
-        self.dt.copy_(self.dt[gd[i]])
+        new_positions = self.positions[gd[i], :]
+        new_velocities = self.velocities[gd[i], :]
+        new_masses = torch.full_like(self.masses, self.masses[gd].sum().item() / self.n)
+        new_dt = self.dt[gd[i]]
+        new_snap = SnapShot(positions=new_positions, velocities=new_velocities, masses=new_masses,
+                            time=self.time, omega=self.omega, dt=new_dt)
 
-        accelerations = self.get_accelerations(potentials, self.positions)
-        tau = 2 * math.pi * ((self.positions.norm(dim=-1) + 1e-3) / (accelerations.norm(dim=-1) + 1e-5)).sqrt()
+        accelerations = new_snap.get_accelerations(potentials, new_snap.positions)
+        tau = 2 * math.pi * ((new_snap.positions.norm(dim=-1) + 1e-3) / (accelerations.norm(dim=-1) + 1e-5)).sqrt()
         # compute the sample time for each child particle
-        sample_time = torch.zeros_like(self.masses)
+        sample_time = torch.zeros_like(new_snap.masses)
         uniq_i, inverse_indices, counts = torch.unique_consecutive(i, return_counts=True, return_inverse=True)
         for n_children in range(2, counts.max() + 1):
             number_of_n_children = (counts == n_children).sum()
@@ -311,16 +313,21 @@ class SnapShot(nn.Module):
                                                                                                     device=sample_time.device).repeat(
                     number_of_n_children) / n_children
         sample_time *= tau
-        self.integrate(sample_time, potentials, minsteps=1024, maxsteps=8192, verbose=verbose)
+        new_snap.integrate(sample_time, potentials, minsteps=1024, maxsteps=8192, verbose=verbose)
 
         # perturb the velocities of the children in the rotating frame
         children = (sample_time > 0)
-        self.velocities[children, 0] += velocity_perturbation * torch.randn_like(self.velocities[children, 0]) * (
-                self.velocities[children, 0] - self.omega * self.positions[children, 1])
-        self.velocities[children, 1] += velocity_perturbation * torch.randn_like(self.velocities[children, 1]) * (
-                self.velocities[children, 1] + self.omega * self.positions[children, 0])
-        self.velocities[children, 2] += velocity_perturbation * torch.randn_like(self.velocities[children, 2]) * \
-                                        self.velocities[children, 2]
+        new_snap.velocities[children, 0] += velocity_perturbation * torch.randn_like(
+            new_snap.velocities[children, 0]) * (
+                                                    new_snap.velocities[children, 0] - new_snap.omega *
+                                                    new_snap.positions[children, 1])
+        new_snap.velocities[children, 1] += velocity_perturbation * torch.randn_like(
+            new_snap.velocities[children, 1]) * (
+                                                    new_snap.velocities[children, 1] + new_snap.omega *
+                                                    new_snap.positions[children, 0])
+        new_snap.velocities[children, 2] += velocity_perturbation * torch.randn_like(new_snap.velocities[children, 2]) * \
+                                            new_snap.velocities[children, 2]
+        return new_snap
 
 
 def read_nemo_snapshot(filename, time=1000, stars=range(0, 500000), dm=range(500000, 1000000),
