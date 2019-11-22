@@ -19,17 +19,24 @@ class SnapShot(nn.Module):
         self.register_buffer('time', torch.as_tensor(time))
         self.register_buffer('omega', torch.as_tensor(omega))
         if dt is None:
-            dt = torch.full(self.masses.shape, float('inf'), dtype=self.positions.dtype,
-                            device=self.masses.device)
+            dt = torch.full(self.logmasses.shape, float('inf'), dtype=self.positions.dtype,
+                            device=self.logmasses.device)
 
         self.register_buffer('dt', torch.as_tensor(dt))
+        self.dropout = nn.Dropout()
+        self.eval()
 
     @property
     def masses(self):
-        return self.logmasses.exp()
+        """Targets should only ever use masses so they get dropout applied."""
+        return self.dropout(self.logmasses.exp())
 
     def extra_repr(self):
-        return f'n_particles={self.n}'
+        return f'n_particles={self.n} omega={self.omega}'
+
+    def forward(self, target):
+        """ Compute the target. The statements snap(target) and target(snap) are equivalent."""
+        return target(self)
 
     def as_numpy_array(self):
         """Returns as a nmagic type matrix of dimension [:,7] with positions at [:,1:4], velocities at [:,4:7] and
@@ -299,7 +306,7 @@ class SnapShot(nn.Module):
                             time=self.time, omega=self.omega, dt=new_dt)
 
         accelerations = new_snap.get_accelerations(potentials, new_snap.positions)
-        tau = 2 * math.pi * ((new_snap.positions.norm(dim=-1) + 1e-3) / (accelerations.norm(dim=-1) + 1e-5)).sqrt()
+        tau = 4 * math.pi * ((new_snap.positions.norm(dim=-1) + 1e-3) / (accelerations.norm(dim=-1) + 1e-5)).sqrt()
         # compute the sample time for each child particle
         sample_time = torch.zeros_like(new_snap.masses)
         uniq_i, inverse_indices, counts = torch.unique_consecutive(i, return_counts=True, return_inverse=True)
@@ -318,13 +325,11 @@ class SnapShot(nn.Module):
         # perturb the velocities of the children in the rotating frame
         children = (sample_time > 0)
         new_snap.velocities[children, 0] += velocity_perturbation * torch.randn_like(
-            new_snap.velocities[children, 0]) * (
-                                                    new_snap.velocities[children, 0] - new_snap.omega *
-                                                    new_snap.positions[children, 1])
+            new_snap.velocities[children, 0]) * (new_snap.velocities[children, 0] - new_snap.omega *
+                                                 new_snap.positions[children, 1])
         new_snap.velocities[children, 1] += velocity_perturbation * torch.randn_like(
-            new_snap.velocities[children, 1]) * (
-                                                    new_snap.velocities[children, 1] + new_snap.omega *
-                                                    new_snap.positions[children, 0])
+            new_snap.velocities[children, 1]) * (new_snap.velocities[children, 1] + new_snap.omega *
+                                                 new_snap.positions[children, 0])
         new_snap.velocities[children, 2] += velocity_perturbation * torch.randn_like(new_snap.velocities[children, 2]) * \
                                             new_snap.velocities[children, 2]
         return new_snap
