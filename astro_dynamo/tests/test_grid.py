@@ -11,7 +11,7 @@ def three_by_three_grid():
 
 def test_uncentered_grid():
     grid = Grid(n=(3, 3, 3), grid_edges=torch.tensor(((0., 1.), (-1, 1), (-1, 1))))
-    np.testing.assert_array_almost_equal(grid.x, torch.tensor((0., 0.5, 1)))
+    np.testing.assert_array_almost_equal(grid.cell_midpoints[0], torch.tensor((0., 0.5, 1)))
 
 
 def test_grid_to(three_by_three_grid):
@@ -31,9 +31,12 @@ def test_grid_to_cpu(three_by_three_grid):
 
 
 def test_coordinates(three_by_three_grid):
-    np.testing.assert_array_almost_equal(three_by_three_grid.x, [-1., 0., 1.])
-    np.testing.assert_array_almost_equal(three_by_three_grid.y, [-1., 0., 1.])
-    np.testing.assert_array_almost_equal(three_by_three_grid.z, [-1., 0., 1.])
+    np.testing.assert_array_almost_equal(three_by_three_grid.cell_midpoints[0], [-1., 0., 1.])
+    np.testing.assert_array_almost_equal(three_by_three_grid.cell_midpoints[1], [-1., 0., 1.])
+    np.testing.assert_array_almost_equal(three_by_three_grid.cell_midpoints[2], [-1., 0., 1.])
+    np.testing.assert_array_almost_equal(three_by_three_grid.cell_edges[0], [-1.5, -0.5, 0.5, 1.5])
+    np.testing.assert_array_almost_equal(three_by_three_grid.cell_edges[1], [-1.5, -0.5, 0.5, 1.5])
+    np.testing.assert_array_almost_equal(three_by_three_grid.cell_edges[2], [-1.5, -0.5, 0.5, 1.5])
 
 
 @pytest.mark.parametrize('h', [None, 0.5])
@@ -47,7 +50,7 @@ def test_ingrid_in_grid(three_by_three_grid, h):
 
 
 def test_ingrid_h(three_by_three_grid):
-    assert three_by_three_grid.ingrid(torch.tensor([[0., 0., 0.6], ]), h=0.5) == torch.tensor([0])
+    assert three_by_three_grid.ingrid(torch.tensor([[0., 0., 1.4], ]), h=0.5) == torch.tensor([1])
 
 
 @pytest.mark.parametrize('position', [torch.tensor([[0., 0., 0.]]), torch.tensor([[0.1, -0.1, 0.1]])])

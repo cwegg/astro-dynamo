@@ -1,5 +1,4 @@
-from functools import reduce
-from typing import Union
+from typing import Union, List
 
 import torch
 import torch.sparse
@@ -36,19 +35,16 @@ class Grid(nn.Module):
         return self.data.shape
 
     @property
-    def x(self) -> torch.Tensor:
-        """Returns grid points in first dimension"""
-        return torch.linspace(self.min[0].item(), self.max[0].item(), self.n[0].item())
+    def cell_edges(self) -> List[torch.Tensor]:
+        return [torch.linspace(self.min[dim].item() - 0.5 * self.dx[dim].item(),
+                               self.max[dim].item() + 0.5 * self.dx[dim].item(),
+                               self.n[dim].item() + 1) for dim in range(len(self.n))]
 
     @property
-    def y(self) -> torch.Tensor:
-        """Returns grid points in second dimension"""
-        return torch.linspace(self.min[1].item(), self.max[1].item(), self.n[1].item())
-
-    @property
-    def z(self) -> torch.Tensor:
-        """Returns grid points in third dimension"""
-        return torch.linspace(self.min[2].item(), self.max[2].item(), self.n[2].item())
+    def cell_midpoints(self) -> List[torch.Tensor]:
+        return [torch.linspace(self.min[dim].item(),
+                               self.max[dim].item(),
+                               self.n[dim].item()) for dim in range(len(self.n))]
 
     def ingrid(self, positions: torch.Tensor, h: float = None) -> torch.Tensor:
         """Test if positions are in the grid"""
@@ -56,28 +52,25 @@ class Grid(nn.Module):
             return ((positions > self.min[None, :]) &
                     (positions < self.max[None, :])).all(dim=1)
         else:
-            return ((positions > self.min[None, :] + h * self.dx[None, :]) &
-                    (positions < self.max[None, :] - h * self.dx[None, :])).all(dim=1)
+            return ((positions > self.min[None, :] - h * self.dx[None, :]) &
+                    (positions < self.max[None, :] + h * self.dx[None, :])).all(dim=1)
 
     def _float_idx(self, positions: torch.Tensor) -> torch.Tensor:
         return (positions - self.min[None, :]) / self.dx
-
-    def _threed_to_oned(self, i: torch.Tensor) -> torch.Tensor:
-        i1d = (i[:, 0] * self.n[1].item() + i[:, 1]) * self.n[2].item() + i[:, 2]
-        return i1d
 
     def grid_data(self, positions: torch.Tensor, weights: torch.Tensor = None,
                   method: str = 'nearest') -> torch.Tensor:
         """Places data from positions onto grid using method='nearest'|'cic'
         where cic=cloud in cell. Returns gridded data and stores it as class attribute
-        data"""
+        data.
+
+        Note that for nearest we place the data at the nearest grid point. This corresponds to grid edges at
+        the property cell_edges. For cic then if the particle lies on a grid point it is entirely places in that
+        cell, otherwise it is split over multiple cells.
+        """
         dimensions = tuple(self.n)
-        n_elements = reduce(lambda x, y: x * y, dimensions)
         fi = self._float_idx(positions)
-        if method == 'nearest':
-            gd = self.ingrid(positions)
-        else:
-            gd = self.ingrid(positions, h=0.5)
+        gd = self.ingrid(positions, h=0.5)
 
         if weights is not None:
             weights = weights[gd]
@@ -90,14 +83,20 @@ class Grid(nn.Module):
             i = (fi + 0.5).type(torch.int64)
             data = torch.sparse.FloatTensor(i[gd].t(), weights, size=dimensions).to_dense().reshape(dimensions).type(
                 dtype=positions.dtype)
+
         elif method == 'cic':
+            dimensions = tuple(self.n + 2)
             i = fi[gd, ...].floor()
             offset = fi[gd, ...] - i
-            i = i.type(torch.int64)
+            i = i.type(torch.int64) + 1
 
-            data = weights.new_zeros(n_elements)
-            twidle = torch.tensor([0, 1], device=i.device)
-            indexes = torch.cartesian_prod(*torch.split(twidle.repeat(3), 2))
+            data = weights.new_zeros(dimensions)
+            if len(self.n) == 1:
+                # 1d is easier to handle as a special case
+                indexes = torch.tensor([[0], [1]], device=i.device)
+            else:
+                twidle = torch.tensor([0, 1], device=i.device)
+                indexes = torch.cartesian_prod(*torch.split(twidle.repeat(len(self.n)), 2))
             for offsetdims in indexes:
                 thisweights = torch.ones_like(weights)
                 for dimi, offsetdim in enumerate(offsetdims):
@@ -105,9 +104,10 @@ class Grid(nn.Module):
                         thisweights *= (torch.tensor(1.0) - offset[..., dimi])
                     if offsetdim == 1:
                         thisweights *= offset[..., dimi]
-                data += torch.bincount(self._threed_to_oned(i + offsetdims), minlength=n_elements,
-                                       weights=thisweights * weights)
-            data = data.reshape(dimensions)
+                data += torch.sparse.FloatTensor((i + offsetdims).t(), thisweights * weights,
+                                                 size=dimensions).to_dense().type(dtype=positions.dtype)
+            for dim in range(len(self.n)):
+                data = data.narrow(dim, 1, data.shape[dim] - 2)
         else:
             raise ValueError(f'Method {method} not recognised. Allowed values are nearest|cic')
 
