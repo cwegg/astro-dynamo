@@ -13,7 +13,8 @@ class SnapShot(nn.Module):
         # Masses are registered as parameters i.e. something for pytorch to optimise
         # positions, velocities and everything else are buffers i.e. they are the internal state of the model, but
         # shouldn't be optimised
-        self.logmasses = nn.Parameter(masses.log())
+        self.logmassoffset = (masses.sum()/len(masses)).log().detach()
+        self.logmasses = nn.Parameter(masses.log()-self.logmassoffset)
         self.register_buffer('positions', torch.as_tensor(positions))
         self.register_buffer('velocities', torch.as_tensor(velocities))
         self.register_buffer('time', torch.as_tensor(time))
@@ -29,7 +30,7 @@ class SnapShot(nn.Module):
     @property
     def masses(self):
         """Targets should only ever use masses so they get dropout applied."""
-        return self.dropout(self.logmasses.exp())
+        return self.dropout((self.logmasses+self.logmassoffset).exp())
 
     def extra_repr(self):
         return f'n_particles={self.n} omega={self.omega}'
@@ -225,7 +226,6 @@ class SnapShot(nn.Module):
 
         baddt = (self.dt == float("Inf"))
         if baddt.sum() > 0:
-            print('Estimating dt')
             accelerations = self.get_accelerations(potentials, self.positions[baddt, :])
             self.dt[baddt] = 2 * math.pi * (
                     (self.positions[baddt, :].norm(dim=-1) + 1e-3) / (
