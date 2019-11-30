@@ -42,6 +42,13 @@ def fixed_quad(func: Callable[[torch.tensor], torch.tensor], n: int = 5, dtype: 
 
 class SpheroidalPotential(nn.Module):
     def __init__(self, rho_func: Callable[[torch.tensor], torch.tensor], q: torch.tensor = torch.tensor([1.0])):
+        """
+
+        Parameters
+        ----------
+        rho_func : Function which returns density when supplied an ellipsoidal radius m
+        q : flattening of density i.e. rho(m) = rho(sqrt(x**2 + y**2 + z**2/q**2))
+        """
         super(SpheroidalPotential, self).__init__()
         self.rho = rho_func
         self.register_buffer('q', torch.as_tensor(q))
@@ -224,7 +231,7 @@ def fit_q_to_snapshot(snap, r_range=(1, 20), r_bins=10, plot=False):
     return q, qerr
 
 
-def fit_potential_to_snap(snap, rho_func, m_range=(1, 20), m_bins=50, q=None, *args, **kwargs):
+def fit_potential_to_snap(snap, rho_func, m_range=(1, 20), m_bins=50, q=None, return_p=False, *args, **kwargs):
     """Fit an ellipsoidal density function of the form  rho_func(m,p[0],p[1],....) to the snapshot.
     Returns pot : the best fitting potential.
     Must supply initial parameters for this fit.
@@ -234,7 +241,11 @@ def fit_potential_to_snap(snap, rho_func, m_range=(1, 20), m_bins=50, q=None, *a
     if q is None:
         q, qerr = fit_q_to_snapshot(snap, r_range=m_range, r_bins=m_bins)
     popt, perr = fit_spheroidal_function_to_snap(snap, rho_func, q=q, *args, **kwargs)
-    return SpheroidalPotential(lambda m: rho_func(m, *popt), q=q)
+    if return_p:
+        return SpheroidalPotential(lambda m: rho_func(m, *popt), q=q), popt
+    else:
+        return SpheroidalPotential(lambda m: rho_func(m, *popt), q=q)
+
 
 
 def fit_spheroidal_function_to_snap(snap, rho_func, init_parms, m_range=(1, 20), m_bins=50, q=None, plot=False):
