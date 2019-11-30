@@ -1,9 +1,15 @@
+import math
+from typing import List, Union, Tuple
+
 import torch
 import torch.nn as nn
+from astro_dynamo.snap import SnapShot
 
 from .analysesnap import align_bar
 
-_symmetrize_matrix = lambda x,dim : (x+x.flip(dims=[dim]))/2
+_symmetrize_matrix = lambda x, dim: (x + x.flip(dims=[dim])) / 2
+
+
 class DynamicalModel(nn.Module):
     """DynamicalModels class. This containts a snapshot of the particles, the potentials
     in which they move, and the targets to which the model should be fitted.
@@ -45,7 +51,7 @@ class DynamicalModel(nn.Module):
         self.self_gravity_update = self_gravity_update
 
     def forward(self):
-        return [target(self.snap) for target in self.targets]
+        return [target(self) for target in self.targets]
 
     def integrate(self, steps=256):
         with torch.no_grad():
@@ -63,13 +69,12 @@ class DynamicalModel(nn.Module):
                 _symmetrize_matrix(_symmetrize_matrix(self.potentials[0].rho, 0), 1), 2)
             self.potentials[0].grid_accelerations()
             if dm_potential is not None:
-                self.potentials[1]=dm_potential
+                self.potentials[1] = dm_potential
             if update_velocities:
                 new_accelerations = self.snap.get_accelerations(self.potentials, self.snap.positions)
                 new_vc = torch.sum(-new_accelerations * self.snap.positions, dim=-1).sqrt()
                 gd = torch.isfinite(new_vc / old_vc) & (new_vc / old_vc > 0)
                 self.snap.velocities[gd, :] *= (new_vc / old_vc)[gd, None]
-                print(f'gd: {gd.sum()} mean fractional vc change: {(new_vc / old_vc)[gd].mean()}')
             align_bar(self.snap)
 
     def resample(self, velocity_perturbation=0.01):
@@ -81,3 +86,106 @@ class DynamicalModel(nn.Module):
         with torch.no_grad():
             self.snap = self.snap.resample(self.potentials, velocity_perturbation=velocity_perturbation)
             align_bar(self.snap)
+
+
+class MilkyWayModel(DynamicalModel):
+    def __init__(self, snap: SnapShot, potentials: List[nn.Module], targets: List[nn.Module],
+                 self_gravity_update: Union[float, torch.Tensor] = 0.2,
+                 bar_angle: Union[float, torch.Tensor] = 27.,
+                 r_0: Union[float, torch.Tensor] = 8.2,
+                 z_0: Union[float, torch.Tensor] = 0.014,
+                 v_scale: Union[float, torch.Tensor] = 240,
+                 d_scale: Union[float, torch.Tensor] = 1.4,
+                 v_sun: Union[List[float], Tuple[float, float, float],
+                              torch.Tensor] = (11.1, 12.24 + 238.0, 7.25)
+
+                 ):
+        super(MilkyWayModel, self).__init__(snap, potentials, targets, self_gravity_update)
+        self.bar_angle = nn.Parameter(torch.as_tensor(bar_angle), requires_grad=False)
+        self.r_0 = nn.Parameter(torch.as_tensor(r_0), requires_grad=False)
+        self.z_0 = nn.Parameter(torch.as_tensor(z_0), requires_grad=False)
+        self.v_scale = nn.Parameter(torch.as_tensor(v_scale), requires_grad=False)
+        self.d_scale = nn.Parameter(torch.as_tensor(d_scale), requires_grad=False)
+        self.v_sun = nn.Parameter(torch.as_tensor(v_sun), requires_grad=False)
+
+    @property
+    def m_scale(self):
+        G = 4.302E-3  # Gravitational constant in astronomical units
+        return self.d_scale * 1e3 * self.v_scale ** 2 / G
+
+    @property
+    def xyz(self):
+        """Return position of particles in relative to the Sun in cartesian coordinates with units kpc
+        """
+        ddtor = math.pi / 180.
+        ang = self.bar_angle * ddtor
+        pos = self.snap.positions
+        xyz = torch.zeros_like(pos)
+        inplane_gc_distance = (self.r_0 ** 2 - self.z_0 ** 2).sqrt()
+        xyz[:, 0] = (pos[:, 0] * torch.cos(-ang) - pos[:, 1] * torch.sin(-ang)) * self.d_scale + inplane_gc_distance
+        xyz[:, 1] = (pos[:, 0] * torch.sin(-ang) + pos[:, 1] * torch.cos(-ang)) * self.d_scale
+        xyz[:, 2] = pos[:, 2] * self.d_scale - self.z_0
+        return xyz
+
+    @property
+    def l_b_mu(self):
+        """Return array of particles in galactic (l,b,mu) coordinates. (l,b) in degrees. mu is distance modulus"""
+        xyz = self.xyz
+        l_b_mu = torch.zeros_like(xyz)
+        d = (xyz[:, 0] ** 2 + xyz[:, 1] ** 2 + xyz[:, 2] ** 2).sqrt()
+        l_b_mu[:, 0] = torch.atan2(xyz[:, 1], xyz[:, 0]) * 180 / math.pi
+        b_offset = torch.asin(self.z_0 / self.r_0)  # the GC has z = -z_0, rotate b coordinate so this is at l,b=(0,0)
+        l_b_mu[:, 1] = (torch.asin(xyz[:, 2] / d) + b_offset) * 180 / math.pi
+        l_b_mu[:, 2] = 5 * (100 * d).log10()
+        return l_b_mu
+
+    @property
+    def masses(self):
+        return self.snap.masses * self.m_scale
+
+    @property
+    def omega(self):
+        return self.snap.omega * self.v_scale / self.d_scale
+
+    @omega.setter
+    def omega(self, omega: float):
+        self.snap.omega = omega / self.v_scale * self.d_scale
+
+    @property
+    def uvw(self):
+        """Return UVW velocities.
+        """
+        ddtor = math.pi / 180.
+        ang = self.bar_angle * ddtor
+        vxyz = torch.zeros_like(self.snap.positions)
+        # sun moves at Vsun[0] towards galactic center i.e. other stars are moving away towards larger x
+        vel = self.snap.velocities * self.v_scale
+        vxyz[:, 0] = (vel[:, 0] * torch.cos(-ang) - vel[:, 1] * torch.sin(-ang)) + self.v_sun[0]
+        # sun moves at Vsun[1] in direction of rotation, other stars are going slower than (0,-Vc,0)
+        vxyz[:, 1] = (vel[:, 0] * torch.sin(-ang) + vel[:, 1] * torch.cos(-ang)) - self.v_sun[1]
+        # sun is moving towards ngp i.e. other stars on average move at negative vz
+        vxyz[:, 2] = vel[:, 2] - self.v_sun[2]
+        return vxyz
+
+    @property
+    def vr(self):
+        """Return array of particles radial velocities in [km/s]"""
+        xyz = self.xyz
+        vxyz = self.uvw
+        r = xyz.norm(dim=-1)
+        vr = (xyz*vxyz).sum(dim=-1) / r
+        return vr
+
+    @property
+    def mul_mub(self):
+        """Return proper motions of particles in [mas/yr] in (l, b).
+        Proper motion in l is (rate of change of l)*cos(b)"""
+        xyz = self.xyz
+        vxyz = self.uvw
+        r = xyz.norm(dim=-1)
+        rxy = (xyz[:, 0] ** 2 + xyz[:, 1] ** 2).sqrt()
+        # magic number comes from:  1 mas/yr = 4.74057 km/s at 1 kpc
+        mul = (-vxyz[:, 0] * xyz[:, 1] / rxy + vxyz[:, 1] * xyz[:, 0] / rxy) / r / 4.74057
+        mub = (-vxyz[:, 0] * xyz[:, 2] * xyz[:, 0] / rxy -
+                          vxyz[:, 1] * xyz[:, 2] * xyz[:, 1] / rxy + vxyz[:, 2] * rxy) / (r ** 2) / 4.74057
+        return torch.stack((mul, mub),dim=-1)
