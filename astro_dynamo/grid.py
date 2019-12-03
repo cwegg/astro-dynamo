@@ -70,25 +70,28 @@ class Grid(nn.Module):
         """
         dimensions = tuple(self.n)
         fi = self._float_idx(positions)
-        gd = self.ingrid(positions, h=0.5)
 
-        if weights is not None:
-            weights = weights[gd]
-        else:
-            weights = positions.new_ones(gd.sum())
+        if weights is None:
+            weights = positions.new_ones(positions.shape[0])
 
-        if gd.sum() == 0:
-            data = positions.new_zeros(dimensions)
-        elif method == 'nearest':
+        if method == 'nearest':
             i = (fi + 0.5).type(torch.int64)
-            data = torch.sparse.FloatTensor(i[gd].t(), weights, size=dimensions).to_dense().reshape(dimensions).type(
+            gd = ((i>=0) & (i<self.n[None,:])).all(dim=1)
+            if gd.sum() == 0:
+                return positions.new_zeros(dimensions)
+            data = torch.sparse.FloatTensor(i[gd].t(), weights[gd], size=dimensions).to_dense().reshape(dimensions).type(
                 dtype=positions.dtype)
-
         elif method == 'cic':
+
             dimensions = tuple(self.n + 2)
-            i = fi[gd, ...].floor()
-            offset = fi[gd, ...] - i
+            i = fi.floor()
+            offset = fi - i
             i = i.type(torch.int64) + 1
+
+            gd = ((i>=0) & (i<torch.as_tensor(dimensions, dtype=torch.long, device=i.device))).all(dim=1)
+            if gd.sum() == 0:
+                return positions.new_zeros(dimensions)
+            weights, i, offset = weights[gd], i[gd], offset[gd]
 
             data = weights.new_zeros(dimensions)
             if len(self.n) == 1:
