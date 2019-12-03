@@ -1,7 +1,12 @@
 import math
 
+import numpy as np
+import pandas as pd
 import torch
 import torch.nn as nn
+from scipy.interpolate import RegularGridInterpolator
+
+from .grid import Grid
 
 
 class SurfaceDensity(nn.Module):
@@ -38,7 +43,6 @@ class SurfaceDensity(nn.Module):
 
     def evalulate_function(self, surface_density):
         return surface_density(self.rmid)
-
 
 
 class DiskKinematics(SurfaceDensity):
@@ -78,4 +82,117 @@ class DiskKinematics(SurfaceDensity):
             kin *= model.v_scale
         return kin
 
+
+class ParsecLuminosityFunction():
+    def __init__(self,file):
+        """Load a luminosity function downloaded from http://stev.oapd.inaf.it/cgi-bin/cmd .
+        Should have a range of metalicities and ages. feh should be on a regular grid."""
+        with open(file) as fp:
+            line = fp.readline()
+            while line and line[0]=='#':
+                header = line.rstrip().strip("#").split()
+                line = fp.readline()
+        lf_df = pd.read_csv(file,sep='\s+',comment='#',names=header)
+        self.zs = lf_df.Z.unique()
+        self.ages = lf_df.age.unique()
+        self.mags = lf_df.magbinc.unique()
+        assert len(self.zs)*len(self.ages)*len(self.mags) == len(lf_df)
+        lf_df.set_index(['age','Z','magbinc'],inplace=True)
+        lf_df.sort_index(inplace=True)
+        self.interpolators = {}
+        self.grids = {}
+
+        for col in lf_df.columns:
+            grid = np.zeros((len(self.ages),len(self.zs),len(self.mags)))
+            for i,age in enumerate(self.ages):
+                for j,z in enumerate(self.zs):
+                    grid[i,j,:]=lf_df.loc[(age,z,)][col]
+            self.interpolators[col]=RegularGridInterpolator((self.ages,np.log10(self.zs/0.0198)),grid)
+            self.grids[col] = grid
+        self.fehs = np.log10(self.zs/0.0198)
+
+    def get_single_lf(self,band,age,feh,mags=None):
+        """Get the luminosity function for the specified age and feh. Samples at the specified mags, otherwise use the
+        native mags from the loaded luminosty funciton"""
+        lf = self.interpolators[band]((age,feh))
+        if mags is None:
+            return {'mag':self.mags, 'number':lf}
+        else:
+            cumlf = np.cumsum(lf)
+            cum_lf_interpolated = np.interp(mags,self.mags,cumlf)
+            resampled_lf = np.diff(cum_lf_interpolated,prepend=0)
+            resampled_lf[0] = resampled_lf[1]
+            return {'mag':mags, 'number':resampled_lf}
+
+    def get_lf_feh_func(self,band,age,feh_func,mags=None):
+        """Get the luminsoty function for the specified age and function specifying the feh distribution."""
+        weights = feh_func(self.fehs)
+        weights /= np.sum(weights)
+        lf = None
+        for weight, feh in zip(weights,self.fehs):
+            this_lf = self.get_single_lf(band,age,feh,mags=mags)
+            if lf is not None:
+                lf+=weight*this_lf['number']
+            else:
+                lf=weight*this_lf['number']
+        return {'mag':this_lf['mag'], 'number':lf}
+
+
+def convolve_distance_modulus_with_lf(histogram, lf_number, distance_mod_dim=-1):
+    """Helper function that convolves a histogram as a function of distance modulus with a luminosity function. Distance
+    modulus dimension should be specified in distance_mod_dim, otherwise the last is assumed. Your magnitudes
+    should have the same (regular) spacing in both histogram and luminosity function."""
+    if distance_mod_dim is not -1:
+        histogram = histogram.transpose(distance_mod_dim, -1)
+    reshaped = histogram.reshape(-1, 1, histogram.shape[-1])
+    if reshaped.dtype == torch.long:
+        reshaped = reshaped.type(lf_number.dtype)
+    for dim in range(len(histogram.shape) - 1):
+        lf_number = lf_number.unsqueeze(0)
+
+    output = torch.nn.functional.conv1d(lf_number, reshaped.flip(dims=(-1,)))
+    output = output.reshape(tuple(histogram.shape[:-1]) + (-1,))
+    if distance_mod_dim is not -1:
+        output = output.transpose(distance_mod_dim, -1)
+    return output
+
+
+class PositionMagnitude(nn.Module):
+    def __init__(self, luminosity_function, l_range=(-90., 90.), n_l=90,
+                 b_range=(-12., 12.), n_b=20,
+                 mag_range=(11., 12.), n_mag=int(1 / 0.2 + 1)):
+        """Target of a grid in galactic coordinates and magnitude. To convert from the snapshot distances to a magntiude
+         distribution we need the luminosity function, which is assumed constant."""
+        super(PositionMagnitude, self).__init__()
+        self.register_buffer('luminosity_function', torch.as_tensor(luminosity_function['number'], dtype=torch.float))
+
+        first_mu_bin = mag_range[1] - luminosity_function['mag'][-1]
+        last_mu_bin = mag_range[0] - luminosity_function['mag'][0]
+        n_mu_bins = len(luminosity_function['mag']) - n_mag + 1
+
+        self.gridder = Grid(grid_edges=torch.tensor(((l_range[0], l_range[-1]),
+                                                     (b_range[0], b_range[-1]),
+                                                     (first_mu_bin, last_mu_bin))),
+                            n=(n_l, n_b, n_mu_bins))
+
+        self.register_buffer('apparent_mags', torch.linspace(mag_range[0],
+                                                             mag_range[1],
+                                                             n_mag))
+
+        self._check_apparent_mags(luminosity_function['mag'])
+
+    def _check_apparent_mags(self, lf_mags):
+        """Getting the apparent magnitude correct is annoying. Here we do a check that everything is setup ok."""
+        out = convolve_distance_modulus_with_lf(self.gridder.grid_data(torch.as_tensor([[0, 0, 0]])),
+                                                self.luminosity_function)
+        assert torch.allclose(self.apparent_mags, self.gridder.cell_midpoints[2][-1] + lf_mags[0] +
+                              self.gridder.dx[2] * torch.arange(out.shape[2]))
+
+    def forward(self, model):
+        l_b_mu = self.gridder.grid_data(model.l_b_mu, weights=model.masses, method='nearest')
+        out = convolve_distance_modulus_with_lf(l_b_mu, self.luminosity_function) / 0.2
+        return out
+
+    def extra_repr(self):
+        return f'mags={self.apparent_mags[0]}->{self.apparent_mags[-1]}'
 
