@@ -88,7 +88,7 @@ class Grid(nn.Module):
             offset = fi - i
             i = i.type(torch.int64) + 1
 
-            gd = ((i>=0) & (i<torch.as_tensor(dimensions, dtype=torch.long, device=i.device))).all(dim=1)
+            gd = ((i>=1) & (i<=self.n[None, :])).all(dim=1)
             if gd.sum() == 0:
                 return positions.new_zeros(dimensions)
             weights, i, offset = weights[gd], i[gd], offset[gd]
