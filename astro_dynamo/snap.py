@@ -335,20 +335,17 @@ class SnapShot(nn.Module):
         return new_snap
 
 
-def read_nemo_snapshot(filename, time=1000, stars=range(0, 500000), dm=range(500000, 1000000),
+def read_nemo_snapshot(filename, time=1000, groups=(range(0, 500000),range(500000, 1000000)),
                        dtype=torch.float, device=None, flip=True):
     """Loads a nemo snapshot at time into a astro_dynamo snapshot.
-    Requires the number of stars to be specified. These are assumed to be the first particles. """
+    Returns a tuple of snaps, each element corresponds to the indices of the particles sepcified as the ranges
+    arguement,"""
     _, snap = mwtools.nemo.readsnap(filename, times=time)
     snaps = []
-    if stars is not None:
-        snaps += [SnapShot(positions=torch.as_tensor(snap[0, stars, 0:3], dtype=dtype, device=device),
-                           velocities=torch.as_tensor(snap[0, stars, 3:6], dtype=dtype, device=device),
-                           masses=torch.as_tensor(snap[0, stars, 6], dtype=dtype, device=device))]
-    if dm is not None:
-        snaps += [SnapShot(positions=torch.as_tensor(snap[0, dm, 0:3], dtype=dtype, device=device),
-                           velocities=torch.as_tensor(snap[0, dm, 3:6], dtype=dtype, device=device),
-                           masses=torch.as_tensor(snap[0, dm, 6], dtype=dtype, device=device))]
+    for group in groups:
+        snaps += [SnapShot(positions=torch.as_tensor(snap[0, group, 0:3], dtype=dtype, device=device),
+                           velocities=torch.as_tensor(snap[0, group, 3:6], dtype=dtype, device=device),
+                           masses=torch.as_tensor(snap[0, group, 6], dtype=dtype, device=device))]
     if flip:
         for snap in snaps:
             snap.velocities = -snap.velocities

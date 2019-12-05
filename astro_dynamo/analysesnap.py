@@ -91,12 +91,18 @@ def compute_bar_angle(snap, max_r=5, deg=True):
     return bar_angle
 
 
-def align_bar(snap, max_r=5):
+def align_bar(snap, snaps=None, max_r=5):
     """Rotates the bar so that it is aligned to the x-axis. Specifically the m=2 mode is rotated to lie along the x-axis
-    at its maximum"""
+    at its maximum. If snaps argument is supplied then these snapshots are rotated by the same angle as found for the
+    first snap."""
+
     bar_angle = compute_bar_angle(snap, max_r=max_r, deg=False)
     _ = snap.rotate_snap([-bar_angle], snap.positions, snap.velocities, deg=False,
                          inplace=True)
+    if snaps is not None:
+        for snap in snaps:
+            _ = snap.rotate_snap([-bar_angle], snap.positions, snap.velocities, deg=False,
+                                 inplace=True)
 
 
 def barlen(snap, phaselim=None, fractional_m2=None, max_r=7):
