@@ -147,7 +147,7 @@ def convolve_distance_modulus_with_lf(histogram, lf_number, distance_mod_dim=-1)
     reshaped = histogram.reshape(-1, 1, histogram.shape[-1])
     if reshaped.dtype == torch.long:
         reshaped = reshaped.type(lf_number.dtype)
-    for dim in range(len(histogram.shape) - 1):
+    for dim in range(len(reshaped.shape) - 1):
         lf_number = lf_number.unsqueeze(0)
 
     output = torch.nn.functional.conv1d(lf_number, reshaped.flip(dims=(-1,)))
@@ -190,7 +190,7 @@ class PositionMagnitude(nn.Module):
 
     def forward(self, model):
         l_b_mu = self.gridder.grid_data(model.l_b_mu, weights=model.masses, method='nearest')
-        out = convolve_distance_modulus_with_lf(l_b_mu, self.luminosity_function) / 0.2
+        out = convolve_distance_modulus_with_lf(l_b_mu, self.luminosity_function)
         return out
 
     def extra_repr(self):
