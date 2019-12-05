@@ -114,6 +114,11 @@ class MilkyWayModel(DynamicalModel):
         return self.d_scale * 1e3 * self.v_scale ** 2 / G
 
     @property
+    def t_scale(self):
+        """1 iu in time in years"""
+        return self.d_scale/self.v_scale*977813106.
+
+    @property
     def xyz(self):
         """Return position of particles in relative to the Sun in cartesian coordinates with units kpc
         """
