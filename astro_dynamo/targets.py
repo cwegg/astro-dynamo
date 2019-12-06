@@ -1,16 +1,19 @@
 import math
+from typing import List, Union, Tuple, Callable
 
 import numpy as np
 import pandas as pd
 import torch
 import torch.nn as nn
+from astro_dynamo.grid import Grid
+from astro_dynamo.model import DynamicalModel
 from scipy.interpolate import RegularGridInterpolator
-
-from .grid import Grid
 
 
 class SurfaceDensity(nn.Module):
-    def __init__(self, r_range=(0, 10), r_bins=20, physical=False):
+    def __init__(self, r_range: Union[List[float], Tuple[float], torch.Tensor]=(0., 10.),
+                 r_bins: int=20,
+                 physical: bool=False):
         super(SurfaceDensity, self).__init__()
         self.physical = physical
         self.dr = (r_range[1] - r_range[0]) / r_bins
@@ -19,8 +22,7 @@ class SurfaceDensity(nn.Module):
         redge = self.r_min + torch.arange(self.r_bins + 1) * self.dr
         self.register_buffer('area', math.pi * (redge[1:] ** 2 - redge[:-1] ** 2))
 
-
-    def forward(self, model):
+    def forward(self, model: DynamicalModel) -> torch.Tensor:
         snap = model.snap
         r_cyl = (snap.positions[:, 0] ** 2 + snap.positions[:, 1] ** 2).sqrt()
         if self.physical:
@@ -33,15 +35,15 @@ class SurfaceDensity(nn.Module):
             surface_density *= model.m_scale/model.d_scale**2*1e-6 #in Msun/pc**2
         return surface_density
 
-    def extra_repr(self):
+    def extra_repr(self) -> str:
         return f'r_min={self.r_min}, r_max={self.r_min+self.dr*self.r_bins}, r_bins={self.r_bins}'
 
     @property
-    def rmid(self):
+    def rmid(self) -> torch.Tensor:
         return self.r_min + self.dr / 2 + self.dr * torch.arange(self.r_bins, device=self.area.device,
                                                                  dtype=self.area.dtype)
 
-    def evalulate_function(self, surface_density):
+    def evalulate_function(self, surface_density: Callable[[torch.Tensor],torch.Tensor]) -> torch.Tensor:
         return surface_density(self.rmid)
 
 
@@ -49,7 +51,7 @@ class DiskKinematics(SurfaceDensity):
     def __init__(self,*args, **kw_args):
         super(DiskKinematics, self).__init__(*args, **kw_args)
 
-    def forward(self, model):
+    def forward(self, model: DynamicalModel) -> torch.Tensor:
         snap = model.snap
         # Take the usual approach of binning using a sparse tensor so that we get gradients
         r_cyl = (snap.positions[:, 0] ** 2 + snap.positions[:, 1] ** 2).sqrt()
