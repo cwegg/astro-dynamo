@@ -13,15 +13,23 @@ class IMF(ABC):
         pass
 
     @abstractmethod
-    def integral(self, mass: Union[float, np.array]) -> np.array:
+    def number_integral(self, mass: Union[float, np.array]) -> np.array:
         """The number of stars per unit mass born with masses smaller than mass"""
+        pass
+
+    @abstractmethod
+    def mass_integral(self, mass: Union[float, np.array]) -> np.array:
+        """The mass fraction of stars born with masses smaller than mass"""
         pass
 
 
 class PowerLawIMF(IMF):
     def __init__(self, mass_breaks: Sequence[float] = (0.08, 0.5),
                  power_law_indicies: Sequence[float] = (-0.3, -1.3, -2.3)):
-        """A power law IMF. The default corresponds to a Kroupa (2001) IMF."""
+        """A power law IMF. Has power law slopes given by power_law_indicies where the number of stars from m to m+dm is
+        m ** power_law_indicies dm.
+
+        The default corresponds to a Kroupa (2001) IMF."""
         if len(mass_breaks) + 1 != len(power_law_indicies):
             raise ValueError("power_law_indicies should be 1 element longer than breaks")
 
@@ -35,9 +43,9 @@ class PowerLawIMF(IMF):
         self.normalisations = np.asarray(normalisations)
 
         # then ensure that we the normalisation means that we have 1Msun in total
-        self.normalisations /= self.integral(np.inf)
+        self.normalisations /= self.mass_integral(np.inf)
 
-    def number(self, mass: Union[float, np.array]):
+    def number(self, mass: Union[float, np.array]) -> np.array:
         """The number of stars per unit mass born at mass"""
         mass = np.asarray(mass)
         out = np.zeros_like(mass)
@@ -49,8 +57,9 @@ class PowerLawIMF(IMF):
             out[out_indx] = normalisation * mass[out_indx] ** power_law_index
         return out
 
-    def integral(self, mass: Union[float, np.array]):
-        """The number of stars per unit mass born with masses smaller than mass"""
+    def _integral(self, mass: Union[float, np.array], mass_power=0) -> np.array:
+        """Helper function that returns \int phi(m)*m**mass_power dm so that the same code can be used
+        with mass_power = 0 for number integral  and mass_power = 1 for mass integral"""
         mass = np.asarray(mass)
         integral = np.zeros_like(mass)
         for break_index, (normalisation, power_law_index) in enumerate(
@@ -58,15 +67,23 @@ class PowerLawIMF(IMF):
             m_min = (self.mass_breaks[break_index - 1] if break_index != 0 else 0.)
             m_max = (self.mass_breaks[break_index] if break_index < len(self.mass_breaks) else np.inf)
             out_indx = (mass >= m_max)
-            if power_law_index != -1.0:
-                integral[out_indx] += normalisation*(m_max ** (power_law_index + 1) - m_min ** (power_law_index + 1)) / (
-                            power_law_index + 1)
+            exponent = power_law_index + mass_power + 1
+            if exponent != 0.:
+                integral[out_indx] += normalisation * (m_max ** exponent - m_min ** exponent) / exponent
             else:
-                integral[out_indx] += normalisation*(np.log(m_max) - np.log(m_min))
+                integral[out_indx] += normalisation * (np.log(m_max) - np.log(m_min))
+
             out_indx = (mass >= m_min) & (mass < m_max)
-            if power_law_index != -1.0:
-                integral[out_indx] += normalisation*(mass[out_indx] ** (power_law_index + 1) - m_min ** (power_law_index + 1)) / (
-                            power_law_index + 1)
+            if exponent != 0.:
+                integral[out_indx] += normalisation * (mass[out_indx] ** exponent - m_min ** exponent) / exponent
             else:
-                integral[out_indx] += normalisation*(np.log(mass[out_indx]) - np.log(m_min))
+                integral[out_indx] += normalisation * (np.log(mass[out_indx]) - np.log(m_min))
         return integral
+
+    def number_integral(self, mass: Union[float, np.array]) -> np.array:
+        """Returns the number of stars per unit mass born with masses smaller than mass"""
+        return self._integral(mass, mass_power=0)
+
+    def mass_integral(self, mass: Union[float, np.array]) -> np.array:
+        """Returns the number of stars per unit mass born with masses smaller than mass"""
+        return self._integral(mass, mass_power=1)
