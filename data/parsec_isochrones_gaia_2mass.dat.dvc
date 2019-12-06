@@ -1,0 +1,8 @@
+md5: ddf137e8147db1a87209f2a5684c8807
+wdir: .
+outs:
+- md5: 8fb039c6aaccde91a0ea3c3125f82297
+  path: parsec_isochrones_gaia_2mass.dat
+  cache: true
+  metric: false
+  persist: false
