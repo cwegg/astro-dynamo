@@ -2,7 +2,6 @@ import numpy as np
 import pytest
 from astro_dynamo.imfs import PowerLawIMF
 
-
 @pytest.fixture(scope="module")
 def simple_power_law_imf():
     return PowerLawIMF(mass_breaks=[0.5], power_law_indicies=[0., -3.])

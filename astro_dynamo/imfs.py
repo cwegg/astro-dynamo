@@ -87,3 +87,21 @@ class PowerLawIMF(IMF):
     def mass_integral(self, mass: Union[float, np.array]) -> np.array:
         """Returns the number of stars per unit mass born with masses smaller than mass"""
         return self._integral(mass, mass_power=1)
+
+
+def remnant_function_maraston98(Mi: Union[float, np.array]) -> np.array:
+    """The remnant_function of Maraston (1998). Returns the final remnant mass
+    for each initial mass
+
+    A bit outdated for the WD inital-final mass relation, but uncertainties in IMF dominate anyway.
+    We dont yet know much more for black hole, neutron star initial final mass relation than in 1998,
+    but maybe soon with LIGO."""
+    Mi = np.asarray(Mi)
+    Mf = np.zeros_like(Mi)
+    wd_idx = (Mi < 8.5)
+    Mf[wd_idx] = 0.077 * Mi[wd_idx] + 0.48
+    ns_idx = (Mi >= 8.5) & (Mi < 40)
+    Mf[ns_idx] = 1.4
+    bh_idx = (Mi >= 40)
+    Mf[bh_idx] = 0.5 * Mi[bh_idx]
+    return Mf
