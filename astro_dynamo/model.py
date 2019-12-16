@@ -21,8 +21,8 @@ class DynamicalModel(nn.Module):
         potentials:
             The potentials add. If self gravity is not required set self_gravity_update to None.
             If self gravity is required then the potential of the snapshot should be in potentials[0]
-            and self_gravity_update represents how much update the running average of the density on
-            each iteration. Default value is 0.2 which is then exponential average with timescale
+            and self_gravity_update represents how much to update the running average of the density on
+            each iteration. Default value is 0.2 which is then exponential averages the density with timescale
             5 snapshots(=1/0.2).
 
         targets:
@@ -98,7 +98,6 @@ class MilkyWayModel(DynamicalModel):
                  d_scale: Union[float, torch.Tensor] = 1.4,
                  v_sun: Union[List[float], Tuple[float, float, float],
                               torch.Tensor] = (11.1, 12.24 + 238.0, 7.25)
-
                  ):
         super(MilkyWayModel, self).__init__(snap, potentials, targets, self_gravity_update)
         self.bar_angle = nn.Parameter(torch.as_tensor(bar_angle), requires_grad=False)
@@ -109,17 +108,17 @@ class MilkyWayModel(DynamicalModel):
         self.v_sun = nn.Parameter(torch.as_tensor(v_sun), requires_grad=False)
 
     @property
-    def m_scale(self):
+    def m_scale(self) -> torch.tensor:
         G = 4.302E-3  # Gravitational constant in astronomical units
         return self.d_scale * 1e3 * self.v_scale ** 2 / G
 
     @property
-    def t_scale(self):
-        """1 iu in time in years"""
-        return self.d_scale/self.v_scale*977813106.
+    def t_scale(self) -> torch.tensor:
+        """1 iu in time in Gyr"""
+        return self.d_scale/self.v_scale*0.977813106 # note that 1km/s is almost 1kpc/Gyr
 
     @property
-    def xyz(self):
+    def xyz(self) -> torch.tensor:
         """Return position of particles in relative to the Sun in cartesian coordinates with units kpc
         """
         ddtor = math.pi / 180.
@@ -133,7 +132,7 @@ class MilkyWayModel(DynamicalModel):
         return xyz
 
     @property
-    def l_b_mu(self):
+    def l_b_mu(self) -> torch.tensor:
         """Return array of particles in galactic (l,b,mu) coordinates. (l,b) in degrees. mu is distance modulus"""
         xyz = self.xyz
         l_b_mu = torch.zeros_like(xyz)
@@ -145,11 +144,11 @@ class MilkyWayModel(DynamicalModel):
         return l_b_mu
 
     @property
-    def masses(self):
+    def masses(self) -> torch.tensor:
         return self.snap.masses * self.m_scale
 
     @property
-    def omega(self):
+    def omega(self) -> torch.tensor:
         return self.snap.omega * self.v_scale / self.d_scale
 
     @omega.setter
@@ -157,7 +156,7 @@ class MilkyWayModel(DynamicalModel):
         self.snap.omega = omega / self.v_scale * self.d_scale
 
     @property
-    def uvw(self):
+    def uvw(self) -> torch.tensor:
         """Return UVW velocities.
         """
         ddtor = math.pi / 180.
@@ -173,7 +172,7 @@ class MilkyWayModel(DynamicalModel):
         return vxyz
 
     @property
-    def vr(self):
+    def vr(self) -> torch.tensor:
         """Return array of particles radial velocities in [km/s]"""
         xyz = self.xyz
         vxyz = self.uvw
@@ -182,7 +181,7 @@ class MilkyWayModel(DynamicalModel):
         return vr
 
     @property
-    def mul_mub(self):
+    def mul_mub(self) -> torch.tensor:
         """Return proper motions of particles in [mas/yr] in (l, b).
         Proper motion in l is (rate of change of l)*cos(b)"""
         xyz = self.xyz
@@ -193,4 +192,4 @@ class MilkyWayModel(DynamicalModel):
         mul = (-vxyz[:, 0] * xyz[:, 1] / rxy + vxyz[:, 1] * xyz[:, 0] / rxy) / r / 4.74057
         mub = (-vxyz[:, 0] * xyz[:, 2] * xyz[:, 0] / rxy -
                           vxyz[:, 1] * xyz[:, 2] * xyz[:, 1] / rxy + vxyz[:, 2] * rxy) / (r ** 2) / 4.74057
-        return torch.stack((mul, mub),dim=-1)
+        return torch.stack((mul, mub), dim=-1)
