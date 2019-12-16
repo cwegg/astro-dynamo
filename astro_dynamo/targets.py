@@ -1,13 +1,10 @@
 import math
 from typing import List, Union, Tuple, Callable
 
-import numpy as np
-import pandas as pd
 import torch
 import torch.nn as nn
 from astro_dynamo.grid import Grid
 from astro_dynamo.model import DynamicalModel
-from scipy.interpolate import RegularGridInterpolator
 
 
 class SurfaceDensity(nn.Module):
@@ -83,61 +80,6 @@ class DiskKinematics(SurfaceDensity):
         if self.physical:
             kin *= model.v_scale
         return kin
-
-
-class ParsecLuminosityFunction():
-    def __init__(self,file):
-        """Load a luminosity function downloaded from http://stev.oapd.inaf.it/cgi-bin/cmd .
-        Should have a range of metalicities and ages. feh should be on a regular grid."""
-        with open(file) as fp:
-            line = fp.readline()
-            while line and line[0]=='#':
-                header = line.rstrip().strip("#").split()
-                line = fp.readline()
-        lf_df = pd.read_csv(file,sep='\s+',comment='#',names=header)
-        self.zs = lf_df.Z.unique()
-        self.ages = lf_df.age.unique()
-        self.mags = lf_df.magbinc.unique()
-        assert len(self.zs)*len(self.ages)*len(self.mags) == len(lf_df)
-        lf_df.set_index(['age','Z','magbinc'],inplace=True)
-        lf_df.sort_index(inplace=True)
-        self.interpolators = {}
-        self.grids = {}
-
-        for col in lf_df.columns:
-            grid = np.zeros((len(self.ages),len(self.zs),len(self.mags)))
-            for i,age in enumerate(self.ages):
-                for j,z in enumerate(self.zs):
-                    grid[i,j,:]=lf_df.loc[(age,z,)][col]
-            self.interpolators[col]=RegularGridInterpolator((self.ages,np.log10(self.zs/0.0198)),grid)
-            self.grids[col] = grid
-        self.fehs = np.log10(self.zs/0.0198)
-
-    def get_single_lf(self,band,age,feh,mags=None):
-        """Get the luminosity function for the specified age and feh. Samples at the specified mags, otherwise use the
-        native mags from the loaded luminosty funciton"""
-        lf = self.interpolators[band]((age,feh))
-        if mags is None:
-            return {'mag':self.mags, 'number':lf}
-        else:
-            cumlf = np.cumsum(lf)
-            cum_lf_interpolated = np.interp(mags,self.mags,cumlf)
-            resampled_lf = np.diff(cum_lf_interpolated,prepend=0)
-            resampled_lf[0] = resampled_lf[1]
-            return {'mag':mags, 'number':resampled_lf}
-
-    def get_lf_feh_func(self,band,age,feh_func,mags=None):
-        """Get the luminsoty function for the specified age and function specifying the feh distribution."""
-        weights = feh_func(self.fehs)
-        weights /= np.sum(weights)
-        lf = None
-        for weight, feh in zip(weights,self.fehs):
-            this_lf = self.get_single_lf(band,age,feh,mags=mags)
-            if lf is not None:
-                lf+=weight*this_lf['number']
-            else:
-                lf=weight*this_lf['number']
-        return {'mag':this_lf['mag'], 'number':lf}
 
 
 def convolve_distance_modulus_with_lf(histogram, lf_number, distance_mod_dim=-1):
