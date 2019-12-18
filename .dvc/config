@@ -1,4 +1,6 @@
 ['remote "s3remote"']
 url = s3://astro-dynamo/astro-dynamo
 [core]
-remote = s3remote
+remote = read_access
+['remote "read_access"']
+url = https://astro-dynamo.s3.amazonaws.com/astro-dynamo/
