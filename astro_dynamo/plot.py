@@ -29,8 +29,9 @@ def plot_snap_projections(model: Union[astro_dynamo.model.DynamicalModel, astro_
         raise ("Expected a DynamicalModel or SnapShot to plot")
 
     if axs is None:
-        f, axs = plt.subplots(2, 2, figsize=(9, 9))
-        axs[-1, -1].axis('off')
+        f, axs = plt.subplots(2, 1, sharex='col')
+    else:
+        f = axs.flatten()[0].figure
 
     x = snap.x.cpu() * d_scale
     y = snap.y.cpu() * d_scale
