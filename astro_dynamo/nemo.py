@@ -3,8 +3,11 @@ Routines for calling nemo from python.
 
 To use you need to have installed nemo from https://teuben.github.io/nemo/
 
+<<<<<<< HEAD
 You then need to set the environment varaiable NEMO_LOCATION to your install location
 
+=======
+>>>>>>> 3bdb54fa8922a39f60aa7aff7312ce0d4714b775
 Calling Nemo can be a bit tempramental - the executables are dyanmically linked, and the libraries
 and executables are all in their own envirnoment. We try to handle this, but if it fails then first
 add verbose=True to the failing command, and see if there's a useful message being printed.
