@@ -1,6 +1,6 @@
 import math
 
-import mwtools.nemo
+import astro_dynamo.nemo
 import torch
 import torch.nn as nn
 
@@ -340,7 +340,7 @@ def read_nemo_snapshot(filename, time=1000, groups=(range(0, 500000),range(50000
     """Loads a nemo snapshot at time into a astro_dynamo snapshot.
     Returns a tuple of snaps, each element corresponds to the indices of the particles sepcified as the ranges
     arguement,"""
-    _, snap = mwtools.nemo.readsnap(filename, times=time)
+    _, snap = astro_dynamo.nemo.readsnap(filename, times=time)
     snaps = []
     for group in groups:
         snaps += [SnapShot(positions=torch.as_tensor(snap[0, group, 0:3], dtype=dtype, device=device),
