@@ -1,8 +1,0 @@
-md5: 3e9636b8aef897bc66ec245c4fd8fc44
-wdir: .
-outs:
-- md5: c1eb3a1bae5fe1bd75d2be9d52bd2e6a.dir
-  path: inputmodels
-  cache: true
-  metric: false
-  persist: false
