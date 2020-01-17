@@ -29,7 +29,7 @@ class SurfaceDensity(nn.Module):
         mass_in_bin = torch.sparse.FloatTensor(i[gd].unsqueeze(0), snap.masses[gd], size=(self.r_bins,)).to_dense()
         surface_density = mass_in_bin / self.area
         if self.physical:
-            surface_density *= model.m_scale/model.d_scale**2*1e-6 #in Msun/pc**2
+            surface_density *= model.m_scale/model.d_scale**2/model.snap.n #in Msun/pc**2
         return surface_density
 
     def extra_repr(self) -> str:
@@ -42,6 +42,58 @@ class SurfaceDensity(nn.Module):
 
     def evalulate_function(self, surface_density: Callable[[torch.Tensor],torch.Tensor]) -> torch.Tensor:
         return surface_density(self.rmid)
+
+class DoubleExponentialDisk(nn.Module):
+    def __init__(self, r_range: Union[List[float], Tuple[float], torch.Tensor]=(0., 10.),
+                 r_bins: int=20,
+                 z_range: Union[List[float], Tuple[float], torch.Tensor] = (-2., 2.),
+                 z_bins: int = 20,
+                 physical: bool=False):
+        super(DoubleExponentialDisk, self).__init__()
+        self.physical = physical
+        self.dr = (r_range[1] - r_range[0]) / r_bins
+        self.r_min = r_range[0]
+        self.r_bins = r_bins
+
+        self.dz = (z_range[1] - z_range[0]) / z_bins
+        self.z_min = z_range[0]
+        self.z_bins = z_bins
+
+        redge = self.r_min + torch.arange(self.r_bins + 1) * self.dr
+        self.register_buffer('area', math.pi * (redge[1:] ** 2 - redge[:-1] ** 2))
+        self.register_buffer('volume', self.area*self.dz)
+
+    def forward(self, model: DynamicalModel) -> torch.Tensor:
+        snap = model.snap
+        r_cyl = (snap.positions[:, 0] ** 2 + snap.positions[:, 1] ** 2).sqrt()
+        if self.physical:
+            r_cyl *= model.d_scale
+        i = ((r_cyl - self.r_min) / self.dr).floor().type(torch.long)
+        j = ((snap.positions[:, 2] - self.z_min) / self.dz).floor().type(torch.long)
+        gd = (i >= 0) & (i < self.r_bins) & (j >= 0) & (j < self.z_bins)
+        mass_in_bin = torch.sparse.FloatTensor(torch.stack((i[gd],j[gd])), snap.masses[gd],
+                                               size=(self.r_bins,self.z_bins)).to_dense()
+        surface_density = mass_in_bin/self.volume.unsqueeze(1)
+        if self.physical:
+            surface_density *= model.m_scale/model.d_scale**2*1e-6 #in Msun/pc**2
+        return surface_density
+
+    def extra_repr(self) -> str:
+        return f'r_min={self.r_min}, r_max={self.r_min+self.dr*self.r_bins}, r_bins={self.r_bins}, ' \
+               f'z_min={self.z_min}, z_max={self.z_min+self.dz*self.z_bins}, z_bins={self.z_bins}'
+
+    @property
+    def rmid(self) -> torch.Tensor:
+        return self.r_min + self.dr / 2 + self.dr * torch.arange(self.r_bins, device=self.area.device,
+                                                                 dtype=self.area.dtype)
+    @property
+    def zmid(self) -> torch.Tensor:
+        return self.z_min + self.dz / 2 + self.dz * torch.arange(self.z_bins, device=self.area.device,
+                                                                 dtype=self.area.dtype)
+
+    def evalulate_function(self, disk_density: Callable[[torch.Tensor,torch.Tensor],torch.Tensor]) -> torch.Tensor:
+        rmat, zmat = torch.meshgrid(self.rmid, self.zmid)
+        return disk_density(rmat, zmat)
 
 
 class DiskKinematics(SurfaceDensity):

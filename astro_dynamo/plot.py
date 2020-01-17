@@ -8,6 +8,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch
 from matplotlib.axes import SubplotBase
+from mpl_toolkits.axes_grid1.axes_divider import make_axes_locatable
+from mpl_toolkits.axes_grid1.colorbar import colorbar
 
 
 def plot_snap_projections(model: Union[astro_dynamo.model.DynamicalModel, astro_dynamo.snap.SnapShot],
@@ -147,3 +149,66 @@ def plot_surface_density_profile(model: astro_dynamo.model.DynamicalModel,
     ax.set_ylim(1, 1e4)
     ax.legend()
     return ax
+
+
+def plot_disk_density_twod(model: astro_dynamo.model.DynamicalModel,
+                           axs: Sequence[SubplotBase] = None,
+                           target_values: torch.Tensor = None) -> matplotlib.figure.Figure:
+    """Plots the azimuthally averaged surface density of a model.
+    The model must contain a SurfaceDensity target to be plotted.
+
+    If supplied plots into axis ax, otherwise creates a new figure."""
+
+    if axs is None:
+        ncol = 2 if target_values is not None else 1
+        f, axs = plt.subplots(2, ncol, sharex=True, sharey=True, squeeze=False)
+    else:
+        f = axs[0].figure
+
+    try:
+        disk_density_obj = next(target for target in model.targets
+                                if type(target) == astro_dynamo.targets.DoubleExponentialDisk)
+    except:
+        raise TypeError("Couldn't find a DoubleExponentialDisk target in the model.")
+
+    model_disk_density = disk_density_obj(model).detach()
+    model_disk_density_normed = model_disk_density / model_disk_density.sum(dim=1).unsqueeze(1)
+
+    data = model_disk_density.t().log10().cpu().numpy()
+    levels = np.max(data) + np.arange(-10,1)*np.log10(np.exp(1.0))
+    print(levels)
+    cs = axs[0, 0].contourf(disk_density_obj.rmid.cpu(), disk_density_obj.zmid.cpu(),
+                            data, levels=levels)
+
+    data = model_disk_density_normed.t().log10().cpu().numpy()
+    levels = np.max(data) + np.arange(-5,1)*np.log10(np.exp(1.0))
+    cs_normed = axs[1, 0].contourf(disk_density_obj.rmid.cpu(), disk_density_obj.zmid.cpu(),
+                            data, levels=levels)
+    print(levels)
+
+    axs[0, 0].set_ylabel('z [kpc]')
+    axs[1, 0].set_ylabel('z [kpc]')
+    axs[1, 0].set_xlabel('R [kpc]')
+    if target_values is not None:
+        target_values_normed = target_values / target_values.sum(dim=1).unsqueeze(1)
+        axs[0, 1].contourf(disk_density_obj.rmid.cpu(), disk_density_obj.zmid.cpu(),
+                           target_values.t().log10().cpu().numpy(),levels=cs.levels)
+
+        axs[1, 1].contourf(disk_density_obj.rmid.cpu(), disk_density_obj.zmid.cpu(),
+                           target_values_normed.t().log10().cpu().numpy(),levels=cs_normed.levels)
+
+
+        axs[1, 1].set_xlabel('R [kpc]')
+        axs[0, 0].set_title('Model')
+        axs[0, 1].set_title('Target')
+    ax_divider = make_axes_locatable(axs[0, -1])
+    cax = ax_divider.append_axes("right", size="7%", pad="2%")
+    cb = colorbar(cs, cax=cax)
+
+    ax_divider = make_axes_locatable(axs[1, -1])
+    cax = ax_divider.append_axes("right", size="7%", pad="2%")
+    cb = colorbar(cs_normed, cax=cax)
+
+    return f
+
+
