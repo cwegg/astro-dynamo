@@ -1,17 +1,23 @@
 cmd: ./run_gyrfalcon.sh M90
 deps:
 - path: M90_magalie
+  md5: 9d760b05f7ae9f756410133a676e09dd
 - path: run_gyrfalcon.sh
+  md5: cfc4a1f17d87fd376be03e582507dfdc
 outs:
 - path: M90_gyrfalcon
   cache: true
   metric: false
   persist: false
+  md5: 472c7d765a578d4f518293986956aaa5
 - path: M90_gyrfalcon.log
   cache: true
   metric: false
   persist: false
+  md5: 7e0aed21a7f238afa9b0a7741971ee6b
 - path: M90_gyrfalcon.stdout
   cache: true
   metric: false
   persist: false
+  md5: d41d8cd98f00b204e9800998ecf8427e
+md5: 64f2bea647fa3e8e605e5984b9a71dda
