@@ -1,6 +1,5 @@
 /M80_magalie
 /M82.5_magalie
-/outM85
 /M80
 /M82.5
 /M85
@@ -12,3 +11,15 @@
 /M90_gyrfalcon
 /M90_gyrfalcon.log
 /M90_gyrfalcon.stdout
+/M87.5_gyrfalcon
+/M87.5_gyrfalcon.log
+/M87.5_gyrfalcon.stdout
+/M85_gyrfalcon
+/M85_gyrfalcon.log
+/M85_gyrfalcon.stdout
+/M80_gyrfalcon
+/M80_gyrfalcon.log
+/M80_gyrfalcon.stdout
+/M82.5_gyrfalcon
+/M82.5_gyrfalcon.log
+/M82.5_gyrfalcon.stdout

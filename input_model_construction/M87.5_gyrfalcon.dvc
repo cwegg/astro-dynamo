@@ -1,17 +1,23 @@
 cmd: ./run_gyrfalcon.sh M87.5
 deps:
 - path: M87.5_magalie
+  md5: e6b5396fc2670320e9eee29fa1ae5cd6
 - path: run_gyrfalcon.sh
+  md5: cfc4a1f17d87fd376be03e582507dfdc
 outs:
 - path: M87.5_gyrfalcon
   cache: true
   metric: false
   persist: false
+  md5: c8f60a2cb62d2b660793b110c6232374
 - path: M87.5_gyrfalcon.log
   cache: true
   metric: false
   persist: false
+  md5: 7ff3b3ade636bc2e46a7c2243a3577c4
 - path: M87.5_gyrfalcon.stdout
   cache: true
   metric: false
   persist: false
+  md5: d41d8cd98f00b204e9800998ecf8427e
+md5: 8a8e236f23737ee015db2cec82e05b29
