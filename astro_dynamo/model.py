@@ -29,7 +29,7 @@ class DynamicalModel(nn.Module):
             A list of targets. Running
                 model = DynamicalModel(snap, potentials, targets)
                 current_target_list = model()
-            will provide an list of these targets evaluated with the present model. These are then
+            will provide an list of theDynamicalModelse targets evaluated with the present model. These are then
             typically combined to a loss that pytorch can optimise.
 
     Methods:
@@ -87,6 +87,30 @@ class DynamicalModel(nn.Module):
             self.snap = self.snap.resample(self.potentials, velocity_perturbation=velocity_perturbation)
             align_bar(self.snap)
 
+    def vc(self, components=False, r=torch.linspace(0, 9), phi=torch.linspace(0, math.pi)):
+        """Returns (r,vc) the circular velocity of the model in physical units and locations at which it was evaluated.
+
+        If components=True then return list containing the vc of each component, otherwise just return the total.
+        r optionally specifies the physical radii at which to compute vc
+        phi specifies the azimuths over which to average."""
+        phi_grid, r_grid = torch.meshgrid(phi, r)
+        phi_grid, r_grid = phi_grid.flatten(), r_grid.flatten()
+        pos = torch.stack((r_grid * torch.cos(phi_grid), r_grid * torch.sin(phi_grid), 0 * phi_grid)).t()
+        pos = pos.to(device=self.d_scale.device)
+        pos /= self.d_scale
+        vc = []
+        for potential in self.potentials:
+            device = next(potential.buffers()).device
+            acc = potential.get_accelerations(pos.to(device=device)).to(device=pos.device)
+            vc += [torch.sum(-acc * pos, dim=1).sqrt().reshape(phi.shape+r.shape).mean(dim=0) * self.v_scale]
+        if components:
+            return r, vc
+        else:
+            total_vc = vc[0]
+            for thisvc in vc[1:]:
+                total_vc = (total_vc ** 2 + thisvc ** 2).sqrt()
+            return r, total_vc
+
 
 class MilkyWayModel(DynamicalModel):
     def __init__(self, snap: SnapShot, potentials: List[nn.Module], targets: List[nn.Module],
@@ -115,7 +139,7 @@ class MilkyWayModel(DynamicalModel):
     @property
     def t_scale(self) -> torch.tensor:
         """1 iu in time in Gyr"""
-        return self.d_scale/self.v_scale*0.977813106 # note that 1km/s is almost 1kpc/Gyr
+        return self.d_scale / self.v_scale * 0.977813106  # note that 1km/s is almost 1kpc/Gyr
 
     @property
     def xyz(self) -> torch.tensor:
@@ -177,7 +201,7 @@ class MilkyWayModel(DynamicalModel):
         xyz = self.xyz
         vxyz = self.uvw
         r = xyz.norm(dim=-1)
-        vr = (xyz*vxyz).sum(dim=-1) / r
+        vr = (xyz * vxyz).sum(dim=-1) / r
         return vr
 
     @property
@@ -191,5 +215,5 @@ class MilkyWayModel(DynamicalModel):
         # magic number comes from:  1 mas/yr = 4.74057 km/s at 1 kpc
         mul = (-vxyz[:, 0] * xyz[:, 1] / rxy + vxyz[:, 1] * xyz[:, 0] / rxy) / r / 4.74057
         mub = (-vxyz[:, 0] * xyz[:, 2] * xyz[:, 0] / rxy -
-                          vxyz[:, 1] * xyz[:, 2] * xyz[:, 1] / rxy + vxyz[:, 2] * rxy) / (r ** 2) / 4.74057
+               vxyz[:, 1] * xyz[:, 2] * xyz[:, 1] / rxy + vxyz[:, 2] * rxy) / (r ** 2) / 4.74057
         return torch.stack((mul, mub), dim=-1)
