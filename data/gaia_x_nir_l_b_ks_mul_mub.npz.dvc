@@ -1,0 +1,7 @@
+md5: 9e888fc1d905b7d3423fe09aa85c84b7
+outs:
+- md5: 7b630222e91adb7a286c35db1f47e14a
+  path: gaia_x_nir_l_b_ks_mul_mub.npz
+  cache: true
+  metric: false
+  persist: false
