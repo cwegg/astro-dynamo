@@ -25,7 +25,8 @@ def _make_nemo_env():
     Nemo doesnt make static executables for GyrFalcon/getgravity. normally nemo_start.csh would add the paths to the
     libraries. here we call nemo_start.csh and use the environment variables it sets to create our environment
     """
-    command = ['csh', '-c', 'source ' + os.path.join(_NEMO_LOCATION, 'nemo_start.csh') + '  && env']
+    command = ['csh', '-c', 'source ' + os.path.join(_NEMO_LOCATION,
+                                                     'nemo_start.csh') + '  && env']
     proc = subprocess.Popen(command, stdout=subprocess.PIPE)
 
     for line in proc.stdout:
@@ -45,12 +46,15 @@ _NEMO_ENV = _make_nemo_env()
 def call_nemo_executable(executable, arguments):
     """Call nemo executable (should be a string) with arguments (should be a list).
     Returns Popen object with .stdin, .stdout and .stderr attributes."""
-    p = subprocess.Popen([os.path.join(_NEMO_BIN_LOCATION, executable)] + arguments,
-                         stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=_NEMO_ENV)
+    p = subprocess.Popen(
+        [os.path.join(_NEMO_BIN_LOCATION, executable)] + arguments,
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        env=_NEMO_ENV)
     return p
 
 
-def writesnap(particles, filename, time=0.0, verbose=False, positions_only=False, filter_mass=False):
+def writesnap(particles, filename, time=0.0, verbose=False,
+              positions_only=False, filter_mass=False):
     """
     Write a nemo snapshot of particles to filename, uses snapshot time=0 by deafult
     This writes a snapshot with postitions, velocities and masses. Use positions_only to just write only postitions.
@@ -64,7 +68,8 @@ def writesnap(particles, filename, time=0.0, verbose=False, positions_only=False
         v = particles[:, 3:6]
 
     if positions_only:
-        p = call_nemo_executable('atos', ["in=-", "out=" + filename, "options=pos"])
+        p = call_nemo_executable('atos',
+                                 ["in=-", "out=" + filename, "options=pos"])
         p.stdin.write('{} 3 {} 0'.format(npart, time).encode('ascii'))
         np.savetxt(p.stdin, x, fmt='%e', delimiter=' ')
     else:
@@ -73,7 +78,8 @@ def writesnap(particles, filename, time=0.0, verbose=False, positions_only=False
             npart = np.sum(good)
             x, m, v = x[good], m[good], v[good]
 
-        p = call_nemo_executable('atos', ["in=-", "out=" + filename, "options=mass,pos,vel"])
+        p = call_nemo_executable('atos', ["in=-", "out=" + filename,
+                                          "options=mass,pos,vel"])
         p.stdin.write('{} 3 {} 0'.format(npart, time).encode('ascii'))
         np.savetxt(p.stdin, m, fmt='%e', delimiter=' ')
         np.savetxt(p.stdin, x, fmt='%e', delimiter=' ')
@@ -90,19 +96,21 @@ def readsnap(filename, times='all', verbose=False, give='t,x,y,z,vx,vy,vz,m'):
     This reads a snapshot with postitions, velocities and masses.
     """
     if not os.path.exists(filename):
-        raise FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT), filename)
+        raise FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT),
+                                filename)
 
-    p = call_nemo_executable("snapprint", ["in=" + filename, "options="+give, f"times={times}"])
+    p = call_nemo_executable("snapprint", ["in=" + filename, "options=" + give,
+                                           f"times={times}"])
 
     snaps = np.genfromtxt(p.stdout)
     if verbose:
         print(p.stderr.read().decode('utf-8'))
 
-    columns = give.count(',')+1
+    columns = give.count(',') + 1
     tlist, ti = np.unique(snaps[:, 0], return_inverse=True)
-    snaps = (np.reshape(snaps, (len(tlist), np.size(snaps) // (columns * len(tlist)), columns)))[:, :, 1:]
+    rows = np.size(snaps) // (columns * len(tlist))
+    snaps = (np.reshape(snaps, (len(tlist), rows, columns)))[:, :, 1:]
     return tlist, snaps
-
 
 
 def rotationcurve(particles, nr=100, ntheta=100, rrange=(0, 10), verbose=False):
@@ -149,8 +157,10 @@ def getpartpot(particles, verbose=False):
         filein = tmpdirname + 'partpot.in'
         writesnap(particles, filename=filein, time=0.0)
         fileout = tmpdirname + 'partpot.falc'
-        p = call_nemo_executable("gyrfalcON", ["in=" + filein, "out=" + fileout, "tstop=0", "theta=0.5",
-                                               "eps=0.05", "kmax=6", "give=phi", "Ncrit=20"])
+        p = call_nemo_executable("gyrfalcON",
+                                 ["in=" + filein, "out=" + fileout, "tstop=0",
+                                  "theta=0.5",
+                                  "eps=0.05", "kmax=6", "give=phi", "Ncrit=20"])
         (stdout, stderr) = p.communicate()
         if verbose:
             print(stdout.decode('utf-8'), stderr.decode('utf-8'))
@@ -175,17 +185,22 @@ def getgravity(particles, positions, verbose=False):
     with tempfile.TemporaryDirectory() as tmpdirname:
 
         filein = os.path.join(tmpdirname, 'part.in')
-        writesnap(particles, filename=filein, time=0.0, filter_mass=True, verbose=verbose)
+        writesnap(particles, filename=filein, time=0.0, filter_mass=True,
+                  verbose=verbose)
 
         posfilein = os.path.join(tmpdirname, 'pos.in')
-        writesnap(positions, filename=posfilein, time=0.0, positions_only=True, verbose=verbose)
+        writesnap(positions, filename=posfilein, time=0.0, positions_only=True,
+                  verbose=verbose)
 
         fileout = os.path.join(tmpdirname, 'gravity.out')
-        p = call_nemo_executable("getgravity", ["srce=" + filein, "sink=" + posfilein, "out=" + fileout, "Ncrit=20"])
+        p = call_nemo_executable("getgravity",
+                                 ["srce=" + filein, "sink=" + posfilein,
+                                  "out=" + fileout, "Ncrit=20"])
         stdout, stderr = p.communicate()
         if verbose:
             print(stdout.decode('utf-8'), stderr.decode('utf-8'))
-        p = call_nemo_executable("snapprint", ["in=" + fileout, "options=ax,ay,az,phi"])
+        p = call_nemo_executable("snapprint",
+                                 ["in=" + fileout, "options=ax,ay,az,phi"])
         fromfalc = np.genfromtxt(p.stdout)
 
         if verbose:
@@ -209,23 +224,28 @@ def integrate(particles, t=1., step=None, verbose=False):
         writesnap(particles, filename=filein, time=0.0)
         fileout = os.path.join(tmpdirname, 'integrate.falc')
         p = call_nemo_executable("gyrfalcON", ["in=" + filein, "out=" + fileout,
-                                               "tstop=" + str(t), "step=" + str(step), "theta=0.5", "eps=0.05",
+                                               "tstop=" + str(t),
+                                               "step=" + str(step), "theta=0.5",
+                                               "eps=0.05",
                                                "kmax=6", "give=mxvp"])
         (stdout, stderr) = p.communicate()
         if verbose:
             print(stdout.decode('utf-8'), stderr.decode('utf-8'))
-        p = call_nemo_executable("snapprint", ["in=" + fileout, "options=t,x,y,z,vx,vy,vz,phi"])
+        p = call_nemo_executable("snapprint", ["in=" + fileout,
+                                               "options=t,x,y,z,vx,vy,vz,phi"])
 
         snaps = np.genfromtxt(p.stdout)
         if verbose:
             print(p.stderr.read().decode('utf-8'))
 
         tlist, ti = np.unique(snaps[:, 0], return_inverse=True)
-        snaps = (np.reshape(snaps, (len(tlist), np.size(snaps) // (9 * len(tlist)), 9)))[:, :, 1:]
+        snaps = (np.reshape(snaps, (
+            len(tlist), np.size(snaps) // (9 * len(tlist)), 9)))[:, :, 1:]
     return tlist, snaps
 
 
-def gravity_cartesian_grid(particles, x, y, z, polar_forces=False, verbose=False):
+def gravity_cartesian_grid(particles, x, y, z, polar_forces=False,
+                           verbose=False):
     """
     Takes vectors of r theta and phi and then on the 3d sphical polar grid and
     computes the gravity using gyrfalcON.
@@ -258,7 +278,8 @@ def gravity_cartesian_grid(particles, x, y, z, polar_forces=False, verbose=False
         with np.errstate(divide='ignore', invalid='ignore'):
             Fr = (Fx * xmat + Fy * ymat + Fz * zmat) / rmat
             Rcyl = np.sqrt(xmat ** 2 + ymat ** 2)
-            Ftheta = ((xmat * Fx + ymat * Fy) * zmat - Rcyl ** 2 * Fz) / rmat / Rcyl
+            Ftheta = ((
+                              xmat * Fx + ymat * Fy) * zmat - Rcyl ** 2 * Fz) / rmat / Rcyl
             Fphi = (-ymat * Fx + xmat * Fy) / Rcyl
         Fr[rmat == 0] = 0
         Ftheta[Rcyl == 0] = 0
@@ -269,7 +290,8 @@ def gravity_cartesian_grid(particles, x, y, z, polar_forces=False, verbose=False
     return ret
 
 
-def gravity_spherical_grid(particles, r, theta, phi, polar_forces=False, verbose=False):
+def gravity_spherical_grid(particles, r, theta, phi, polar_forces=False,
+                           verbose=False):
     """
     Takes 1d vectors of x, y and z and then on the resultant 3d cartesian grid
     computes the gravity using gyrfalcON.
@@ -278,7 +300,7 @@ def gravity_spherical_grid(particles, r, theta, phi, polar_forces=False, verbose
     F is [Fx,Fy,Fz] if polar_forces=False (default) and [Fr,Ftheta,Fphi] if polar_forces=True.
     return in internal units i.e. assuming G=1.
     """
-    phi_v, theta_v, r_v  = np.meshgrid(phi, theta, r, indexing='ij')
+    phi_v, theta_v, r_v = np.meshgrid(phi, theta, r, indexing='ij')
     x = r_v * np.sin(theta_v) * np.cos(phi_v)
     y = r_v * np.sin(theta_v) * np.sin(phi_v)
     z = r_v * np.cos(theta_v)

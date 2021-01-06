@@ -2,27 +2,35 @@ import math
 import numpy as np
 import torch
 
-"""This file contains a few tools as functions that others might be useful when 
-analysing  snapshots. It less well tested or clean than the rest of 
+"""This file contains a few tools as functions that others might be useful when
+analysing  snapshots. It less well tested or clean than the rest of
 astrodynamo."""
 
-def patternspeed(snap, rrange=(1, 4), n=range(2, 12, 2), combine=True, plot=None):
+
+def patternspeed(snap, rrange=(1, 4), n=range(2, 12, 2), combine=True,
+                 plot=None):
     """Compute the pattern speed of a snapshot. Uses continuity equation in cylindrical coordinates. Integrating over
     all z and taking fourier transform in angular direction gives i m R F(Sigma) = d/dR{F(Sigma vR)} + i m F(sigma vT)
     where F(y) is the angular fourier transform of y. This provides an equation at each radius and m for Sigma. By
     default combine m=2,4,6,8,10 over the radial range 1->4 into one measurement."""
     rcyl = torch.norm(snap.positions[:, 0:2], dim=-1)
-    vr = torch.einsum('...i,...i->...', snap.positions[:, 0:2], snap.velocities[:, 0:2]) / rcyl
+    vr = torch.einsum('...i,...i->...', snap.positions[:, 0:2],
+                      snap.velocities[:, 0:2]) / rcyl
     vt = (snap.positions[:, 1] * snap.velocities[:, 0] -
           snap.positions[:, 0] * snap.velocities[:, 1]) / rcyl
 
     rbins = np.linspace(0., 10, 50)
-    rmid, (surfdensft, surfdensrvrft, surfdensvtft) = bar_cyl_fft(snap, rbins=rbins, weights=(None, vr * rcyl, vt))
+    rmid, (surfdensft, surfdensrvrft, surfdensvtft) = bar_cyl_fft(snap,
+                                                                  rbins=rbins,
+                                                                  weights=(None,
+                                                                           vr * rcyl,
+                                                                           vt))
     dr = rbins[1] - rbins[0]
     dsurfdensrvr_drft = np.zeros_like(surfdensrvrft)
     dsurfdensrvr_drft[0, :] = (surfdensrvrft[1, :] - surfdensrvrft[0, :]) / dr
     dsurfdensrvr_drft[-1, :] = (surfdensrvrft[-1, :] - surfdensrvrft[-2, :]) / dr
-    dsurfdensrvr_drft[1:-1, :] = (surfdensrvrft[2:, :] - surfdensrvrft[:-2]) / (2 * dr)
+    dsurfdensrvr_drft[1:-1, :] = (surfdensrvrft[2:, :] - surfdensrvrft[:-2]) / (
+                2 * dr)
 
     omegas = []
     omegaerrs = []
@@ -31,7 +39,8 @@ def patternspeed(snap, rrange=(1, 4), n=range(2, 12, 2), combine=True, plot=None
         omega = surfdensvtft[:, i] / surfdensft[:, i] / rmid + \
                 1j * dsurfdensrvr_drft[:, i] / surfdensft[:, i] / i / rmid
         omegas.append(np.abs(np.mean(omega[idx_good_r])))
-        omegaerrs.append(np.std(np.abs(omega[idx_good_r])) / np.sqrt(np.sum(idx_good_r)))
+        omegaerrs.append(
+            np.std(np.abs(omega[idx_good_r])) / np.sqrt(np.sum(idx_good_r)))
     omegas, omegaerrs = np.array(omegas), np.array(omegaerrs)
 
     # combine by weighted mean
@@ -39,13 +48,16 @@ def patternspeed(snap, rrange=(1, 4), n=range(2, 12, 2), combine=True, plot=None
     omegaerr = 1 / np.sqrt(np.sum(1 / omegaerrs ** 2))
 
     if plot is not None:
-        omega, omegaerr = np.sum(omegas / omegaerrs ** 2) / np.sum(1 / omegaerrs ** 2), 1 / np.sqrt(
+        omega, omegaerr = np.sum(omegas / omegaerrs ** 2) / np.sum(
+            1 / omegaerrs ** 2), 1 / np.sqrt(
             np.sum(1 / omegaerrs ** 2))
-        plot.errorbar(np.arange(2, 12, 2), y=omegas, yerr=omegaerrs, fmt='ko', markersize=3)
+        plot.errorbar(np.arange(2, 12, 2), y=omegas, yerr=omegaerrs, fmt='ko',
+                      markersize=3)
         plot.axhline(y=omega, color='r')
-        plot.axhspan(ymin=omega - omegaerr, ymax=omega + omegaerr, color='r', alpha=0.2)
+        plot.axhspan(ymin=omega - omegaerr, ymax=omega + omegaerr, color='r',
+                     alpha=0.2)
         plot.set_ylim([omega - 10 * omegaerr, omega + 10 * omegaerr])
-        plot.set_ylabel('$\Omega$')
+        plot.set_ylabel(r'$\Omega$')
         plot.set_xlabel('Mode $m$')
     if not combine:
         return omegas, omegaerrs
@@ -70,10 +82,12 @@ def bar_cyl_fft(snap, rbins=None, phibins=None, weights=(None,)):
             totalweight = snap.masses
         else:
             totalweight = snap.masses * weight
-        h, redges, phiedges = np.histogram2d(rcyl.detach().cpu().numpy(), phi.detach().cpu().numpy(), (rbins, phibins),
+        h, redges, phiedges = np.histogram2d(rcyl.detach().cpu().numpy(),
+                                             phi.detach().cpu().numpy(),
+                                             (rbins, phibins),
                                              weights=totalweight.detach().cpu().numpy())
-        area = 0.5 * (redges[1:, np.newaxis] ** 2 - redges[:-1, np.newaxis] ** 2) * (
-                phiedges[np.newaxis, 1:] - phiedges[np.newaxis, :-1])
+        area = 0.5 * (redges[1:, np.newaxis] ** 2 - redges[:-1, np.newaxis] ** 2) * \
+            (phiedges[np.newaxis, 1:] - phiedges[np.newaxis, :-1])
         surfdens = h / area
         ft_out += [np.fft.fft(surfdens, axis=1)]
     if len(ft_out) == 1:
@@ -99,11 +113,13 @@ def align_bar(snap, snaps=None, max_r=5):
     first snap."""
 
     bar_angle = compute_bar_angle(snap, max_r=max_r, deg=False)
-    _ = snap.rotate_snap([-bar_angle], snap.positions, snap.velocities, deg=False,
+    _ = snap.rotate_snap([-bar_angle], snap.positions, snap.velocities,
+                         deg=False,
                          inplace=True)
     if snaps is not None:
         for snap in snaps:
-            _ = snap.rotate_snap([-bar_angle], snap.positions, snap.velocities, deg=False,
+            _ = snap.rotate_snap([-bar_angle], snap.positions, snap.velocities,
+                                 deg=False,
                                  inplace=True)
 
 
@@ -140,5 +156,6 @@ def interplen(r, vals, lim, ifid, comp='lt'):
     last_i = np.min(in_bar_i)
     r0, val0 = r[last_i], vals[last_i]
     r1, val1 = r[last_i - 1], vals[last_i - 1]
-    thisbarlen = r1 * (val0 - lim) / (val0 - val1) + r0 * (lim - val1) / (val0 - val1)
+    thisbarlen = r1 * (val0 - lim) / (val0 - val1) + r0 * (lim - val1) / (
+                val0 - val1)
     return thisbarlen

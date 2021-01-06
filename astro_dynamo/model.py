@@ -3,11 +3,14 @@ from typing import List, Union, Tuple
 
 import torch
 import torch.nn as nn
-from astro_dynamo.snap import SnapShot
 
+from astro_dynamo.snap import SnapShot
 from .snaptools import align_bar
 
-_symmetrize_matrix = lambda x, dim: (x + x.flip(dims=[dim])) / 2
+
+def _symmetrize_matrix(x, dim):
+    """Symmetrize a tensor along dimension dim"""
+    return (x + x.flip(dims=[dim])) / 2
 
 
 class DynamicalModel(nn.Module):
@@ -57,22 +60,28 @@ class DynamicalModel(nn.Module):
         with torch.no_grad():
             self.snap.leapfrog_steps(potentials=self.potentials, steps=steps)
             if self.self_gravity_update is not None:
-                self.potentials[0].update_density(self.snap.positions, self.snap.masses.detach(),
+                self.potentials[0].update_density(self.snap.positions,
+                                                  self.snap.masses.detach(),
                                                   fractional_update=self.self_gravity_update)
 
     def update_potential(self, dm_potential=None, update_velocities=True):
         with torch.no_grad():
             if update_velocities:
-                old_accelerations = self.snap.get_accelerations(self.potentials, self.snap.positions)
-                old_vc = torch.sum(-old_accelerations * self.snap.positions, dim=-1).sqrt()
+                old_accelerations = self.snap.get_accelerations(self.potentials,
+                                                                self.snap.positions)
+                old_vc = torch.sum(-old_accelerations * self.snap.positions,
+                                   dim=-1).sqrt()
             self.potentials[0].rho = _symmetrize_matrix(
-                _symmetrize_matrix(_symmetrize_matrix(self.potentials[0].rho, 0), 1), 2)
+                _symmetrize_matrix(
+                    _symmetrize_matrix(self.potentials[0].rho, 0), 1), 2)
             self.potentials[0].grid_accelerations()
             if dm_potential is not None:
                 self.potentials[1] = dm_potential
             if update_velocities:
-                new_accelerations = self.snap.get_accelerations(self.potentials, self.snap.positions)
-                new_vc = torch.sum(-new_accelerations * self.snap.positions, dim=-1).sqrt()
+                new_accelerations = self.snap.get_accelerations(self.potentials,
+                                                                self.snap.positions)
+                new_vc = torch.sum(-new_accelerations * self.snap.positions,
+                                   dim=-1).sqrt()
                 gd = torch.isfinite(new_vc / old_vc) & (new_vc / old_vc > 0)
                 self.snap.velocities[gd, :] *= (new_vc / old_vc)[gd, None]
             align_bar(self.snap)
@@ -84,10 +93,12 @@ class DynamicalModel(nn.Module):
         the model also change in a way that any optimiser that keeps parameter-by-parameter information e.g.
         gradients must also be update."""
         with torch.no_grad():
-            self.snap = self.snap.resample(self.potentials, velocity_perturbation=velocity_perturbation)
+            self.snap = self.snap.resample(self.potentials,
+                                           velocity_perturbation=velocity_perturbation)
             align_bar(self.snap)
 
-    def vc(self, components=False, r=torch.linspace(0, 9), phi=torch.linspace(0, math.pi)):
+    def vc(self, components=False, r=torch.linspace(0, 9),
+           phi=torch.linspace(0, math.pi)):
         """Returns (r,vc) the circular velocity of the model in physical units and locations at which it was evaluated.
 
         If components=True then return list containing the vc of each component, otherwise just return the total.
@@ -95,14 +106,17 @@ class DynamicalModel(nn.Module):
         phi specifies the azimuths over which to average."""
         phi_grid, r_grid = torch.meshgrid(phi, r)
         phi_grid, r_grid = phi_grid.flatten(), r_grid.flatten()
-        pos = torch.stack((r_grid * torch.cos(phi_grid), r_grid * torch.sin(phi_grid), 0 * phi_grid)).t()
+        pos = torch.stack((r_grid * torch.cos(phi_grid),
+                           r_grid * torch.sin(phi_grid), 0 * phi_grid)).t()
         pos = pos.to(device=self.d_scale.device)
         pos /= self.d_scale
         vc = []
         for potential in self.potentials:
             device = next(potential.buffers()).device
-            acc = potential.get_accelerations(pos.to(device=device)).to(device=pos.device)
-            vc += [torch.sum(-acc * pos, dim=1).sqrt().reshape(phi.shape+r.shape).mean(dim=0) * self.v_scale]
+            acc = potential.get_accelerations(pos.to(device=device)).to(
+                device=pos.device)
+            vc += [torch.sum(-acc * pos, dim=1).sqrt().reshape(
+                phi.shape + r.shape).mean(dim=0) * self.v_scale]
         if components:
             return r, vc
         else:
@@ -113,7 +127,8 @@ class DynamicalModel(nn.Module):
 
 
 class MilkyWayModel(DynamicalModel):
-    def __init__(self, snap: SnapShot, potentials: List[nn.Module], targets: List[nn.Module],
+    def __init__(self, snap: SnapShot, potentials: List[nn.Module],
+                 targets: List[nn.Module],
                  self_gravity_update: Union[float, torch.Tensor] = 0.2,
                  bar_angle: Union[float, torch.Tensor] = 27.,
                  r_0: Union[float, torch.Tensor] = 8.2,
@@ -123,12 +138,16 @@ class MilkyWayModel(DynamicalModel):
                  v_sun: Union[List[float], Tuple[float, float, float],
                               torch.Tensor] = (11.1, 12.24 + 238.0, 7.25)
                  ):
-        super(MilkyWayModel, self).__init__(snap, potentials, targets, self_gravity_update)
-        self.bar_angle = nn.Parameter(torch.as_tensor(bar_angle), requires_grad=False)
+        super(MilkyWayModel, self).__init__(snap, potentials, targets,
+                                            self_gravity_update)
+        self.bar_angle = nn.Parameter(torch.as_tensor(bar_angle),
+                                      requires_grad=False)
         self.r_0 = nn.Parameter(torch.as_tensor(r_0), requires_grad=False)
         self.z_0 = nn.Parameter(torch.as_tensor(z_0), requires_grad=False)
-        self.v_scale = nn.Parameter(torch.as_tensor(v_scale), requires_grad=False)
-        self.d_scale = nn.Parameter(torch.as_tensor(d_scale), requires_grad=False)
+        self.v_scale = nn.Parameter(torch.as_tensor(v_scale),
+                                    requires_grad=False)
+        self.d_scale = nn.Parameter(torch.as_tensor(d_scale),
+                                    requires_grad=False)
         self.v_sun = nn.Parameter(torch.as_tensor(v_sun), requires_grad=False)
 
     @property
@@ -150,8 +169,10 @@ class MilkyWayModel(DynamicalModel):
         pos = self.snap.positions
         xyz = torch.zeros_like(pos)
         inplane_gc_distance = (self.r_0 ** 2 - self.z_0 ** 2).sqrt()
-        xyz[:, 0] = (pos[:, 0] * torch.cos(-ang) - pos[:, 1] * torch.sin(-ang)) * self.d_scale + inplane_gc_distance
-        xyz[:, 1] = (pos[:, 0] * torch.sin(-ang) + pos[:, 1] * torch.cos(-ang)) * self.d_scale
+        xyz[:, 0] = (pos[:, 0] * torch.cos(-ang) - pos[:, 1] * torch.sin(
+            -ang)) * self.d_scale + inplane_gc_distance
+        xyz[:, 1] = (pos[:, 0] * torch.sin(-ang) + pos[:, 1] * torch.cos(
+            -ang)) * self.d_scale
         xyz[:, 2] = pos[:, 2] * self.d_scale - self.z_0
         return xyz
 
@@ -162,7 +183,8 @@ class MilkyWayModel(DynamicalModel):
         l_b_mu = torch.zeros_like(xyz)
         d = (xyz[:, 0] ** 2 + xyz[:, 1] ** 2 + xyz[:, 2] ** 2).sqrt()
         l_b_mu[:, 0] = torch.atan2(xyz[:, 1], xyz[:, 0]) * 180 / math.pi
-        b_offset = torch.asin(self.z_0 / self.r_0)  # the GC has z = -z_0, rotate b coordinate so this is at l,b=(0,0)
+        b_offset = torch.asin(
+            self.z_0 / self.r_0)  # the GC has z = -z_0, rotate b coordinate so this is at l,b=(0,0)
         l_b_mu[:, 1] = (torch.asin(xyz[:, 2] / d) + b_offset) * 180 / math.pi
         l_b_mu[:, 2] = 5 * (100 * d).log10()
         return l_b_mu
@@ -214,6 +236,6 @@ class MilkyWayModel(DynamicalModel):
         rxy = (xyz[:, 0] ** 2 + xyz[:, 1] ** 2).sqrt()
         # magic number comes from:  1 mas/yr = 4.74057 km/s at 1 kpc
         mul = (-vxyz[:, 0] * xyz[:, 1] / rxy + vxyz[:, 1] * xyz[:, 0] / rxy) / r / 4.74057
-        mub = (-vxyz[:, 0] * xyz[:, 2] * xyz[:, 0] / rxy -
-               vxyz[:, 1] * xyz[:, 2] * xyz[:, 1] / rxy + vxyz[:, 2] * rxy) / (r ** 2) / 4.74057
+        mub = (-vxyz[:, 0] * xyz[:, 2] * xyz[:, 0] / rxy - vxyz[:, 1] * xyz[:, 2] * xyz[:, 1] / rxy + vxyz[:, 2] * rxy) / (
+                    r ** 2) / 4.74057
         return torch.stack((mul, mub), dim=-1)

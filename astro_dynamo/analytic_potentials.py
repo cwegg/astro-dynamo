@@ -26,7 +26,8 @@ def _cached_roots_legendre(n: int) -> (torch.tensor, torch.tensor):
         return _cached_roots_legendre.cache[n]
     x, w = torch.tensor(roots_legendre(n), dtype=torch.float64)
     _cached_roots_legendre.cache[n] = (
-        torch.tensor(0.5, dtype=torch.float64) * (x + torch.tensor(1, dtype=torch.float64)),
+        torch.tensor(0.5, dtype=torch.float64) * (
+                x + torch.tensor(1, dtype=torch.float64)),
         torch.tensor(0.5, dtype=torch.float64) * w)
     return _cached_roots_legendre.cache[n]
 
@@ -34,14 +35,17 @@ def _cached_roots_legendre(n: int) -> (torch.tensor, torch.tensor):
 _cached_roots_legendre.cache = dict()
 
 
-def fixed_quad(func: Callable[[torch.tensor], torch.tensor], n: int = 5, dtype: torch.dtype = torch.float32,
+def fixed_quad(func: Callable[[torch.tensor], torch.tensor], n: int = 5,
+               dtype: torch.dtype = torch.float32,
                device: torch.device = None) -> torch.tensor:
     y, w = _cached_roots_legendre(n)
-    return torch.sum(w.to(dtype=dtype, device=device) * func(y.to(dtype=dtype, device=device)), axis=-1)
+    return torch.sum(w.to(dtype=dtype, device=device) * func(
+        y.to(dtype=dtype, device=device)), axis=-1)
 
 
 class SpheroidalPotential(nn.Module):
-    def __init__(self, rho_func: Callable[[torch.tensor], torch.tensor], q: torch.tensor = torch.tensor([1.0])):
+    def __init__(self, rho_func: Callable[[torch.tensor], torch.tensor],
+                 q: torch.tensor = torch.tensor([1.0])):
         """
 
         Parameters
@@ -59,10 +63,12 @@ class SpheroidalPotential(nn.Module):
     def extra_repr(self):
         return f'q={self.q}, r_max={self.r_max}, z_max={self.z_max}, grid={self.grid.shape}'
 
-    def _f_compute(self, r_cyl: torch.tensor, z: torch.tensor, rel_tol: float = 1e-6, direction: str = 'r_cyl', *args,
+    def _f_compute(self, r_cyl: torch.tensor, z: torch.tensor,
+                   rel_tol: float = 1e-6, direction: str = 'r_cyl', *args,
                    **kwargs) -> torch.tensor:
         r_cyl, z = map(torch.as_tensor, (r_cyl, z))
-        assert (r_cyl.dtype == z.dtype) and (r_cyl.device == z.device), "r_cyl and z should be same type on same device"
+        assert (r_cyl.dtype == z.dtype) and (
+                r_cyl.device == z.device), "r_cyl and z should be same type on same device"
 
         if direction == 'r_cyl':
             # Change variables of the integral from BT's tau over 0->inf, to x = (1/tau-1)**3 over 0->1.
@@ -71,10 +77,10 @@ class SpheroidalPotential(nn.Module):
                 tau = (1 / x - 1) ** 3
                 r_cyl_mat, z_mat, x, tau = torch.broadcast_tensors(r_cyl.unsqueeze(-1), z.unsqueeze(-1), x, tau)
                 m = torch.sqrt(r_cyl_mat ** 2 / (tau + 1) + z_mat ** 2 / (tau + self.q ** 2))
-                return self.rho(m, *args, **kwargs) / (tau + 1) ** 2 / torch.sqrt(tau + self.q ** 2) * 3 * tau \
-                       / x / (1 - x)
+                return self.rho(m, *args, **kwargs) / (tau + 1) ** 2 / torch.sqrt(tau + self.q ** 2) * 3 * tau / x / (1 - x)
 
-            integral = r_cyl * self._fixedquad(integrand, rel_tol=rel_tol, dtype=z.dtype, device=z.device)
+            integral = r_cyl * self._fixedquad(integrand, rel_tol=rel_tol,
+                                               dtype=z.dtype, device=z.device)
 
         elif direction == 'z':
 
@@ -82,63 +88,72 @@ class SpheroidalPotential(nn.Module):
                 tau = (1 / x - 1) ** 3
                 r_cyl_mat, z_mat, x, tau = torch.broadcast_tensors(r_cyl.unsqueeze(-1), z.unsqueeze(-1), x, tau)
                 m = torch.sqrt(r_cyl_mat ** 2 / (tau + 1) + z_mat ** 2 / (tau + self.q ** 2))
-                return self.rho(m, *args, **kwargs) / (tau + 1) / (tau + self.q ** 2) ** 1.5 * 3 * tau \
-                       / x / (1 - x)
+                return self.rho(m, *args, **kwargs) / (tau + 1) / (tau + self.q ** 2) ** 1.5 * 3 * tau / x / (1 - x)
 
-            integral = z * self._fixedquad(integrand, rel_tol=rel_tol, dtype=z.dtype, device=z.device)
+            integral = z * self._fixedquad(integrand, rel_tol=rel_tol,
+                                           dtype=z.dtype, device=z.device)
 
         else:
             raise ValueError("Direction should be ('r_cyl'|'z')")
 
         return -2 * math.pi * self.q * integral
 
-    def f_r_cyl(self, r_cyl: torch.tensor, z: torch.tensor, *args, **kwargs) -> torch.tensor:
+    def f_r_cyl(self, r_cyl: torch.tensor, z: torch.tensor, *args,
+                **kwargs) -> torch.tensor:
         """Return the force in cylindrical R direction at (r_cyl, z)"""
         return self._f_compute(r_cyl, z, direction='r_cyl', *args, **kwargs)
 
-    def f_z(self, r_cyl: torch.tensor, z: torch.tensor, *args, **kwargs) -> torch.tensor:
+    def f_z(self, r_cyl: torch.tensor, z: torch.tensor, *args,
+            **kwargs) -> torch.tensor:
         """Return the force in the z-direction at (r_cyl, z)"""
         return self._f_compute(r_cyl, z, direction='z', *args, **kwargs)
 
-    def f_r(self, r_cyl: torch.tensor, z: torch.tensor, *args, **kwargs) -> torch.tensor:
+    def f_r(self, r_cyl: torch.tensor, z: torch.tensor, *args,
+            **kwargs) -> torch.tensor:
         """Return the radial force at (r_cyl, z)"""
         r_cyl, z = map(torch.as_tensor, (r_cyl, z))
         r = torch.sqrt(r_cyl ** 2 + z ** 2)
         return (r_cyl * self.f_r_cyl(r_cyl, z, *args, **kwargs) +
                 z * self.f_z(r_cyl, z, *args, **kwargs)) / r
 
-    def f_theta(self, r_cyl: torch.tensor, z: torch.tensor, *args, **kwargs) -> torch.tensor:
+    def f_theta(self, r_cyl: torch.tensor, z: torch.tensor, *args,
+                **kwargs) -> torch.tensor:
         """Return the force in the theta direction at (r_cyl, z)"""
         r_cyl, z = map(torch.as_tensor, (r_cyl, z))
         r = torch.sqrt(r_cyl ** 2 + z ** 2)
         return (z * self.f_r_cyl(r_cyl, z, *args, **kwargs) -
                 r_cyl * self.f_z(r_cyl, z, *args, **kwargs)) / r
 
-    def vc2(self, r_cyl: torch.tensor, z: torch.tensor, *args, **kwargs) -> torch.tensor:
+    def vc2(self, r_cyl: torch.tensor, z: torch.tensor, *args,
+            **kwargs) -> torch.tensor:
         """Return the squared circular velocity at (r_cyl, z)"""
         r_cyl, z = map(torch.as_tensor, (r_cyl, z))
         r = torch.sqrt(r_cyl ** 2 + z ** 2)
         return -self.f_r(r_cyl, z, *args, **kwargs) * r
 
-    def pot_ellip(self, r_cyl: torch.tensor, z: torch.tensor, *args, **kwargs) -> torch.tensor:
+    def pot_ellip(self, r_cyl: torch.tensor, z: torch.tensor, *args,
+                  **kwargs) -> torch.tensor:
         """Return the elipticity of the potential"""
         r_cyl, z = map(torch.as_tensor, (r_cyl, z))
         return torch.sqrt(z * self.f_r_cyl(r_cyl, z, *args, **kwargs) /
                           (r_cyl * self.f_z(r_cyl, z, *args, **kwargs)))
 
     @classmethod
-    def spherical_to_cylindrical(cls, r: torch.tensor, ang: torch.tensor) -> (torch.tensor, torch.tensor):
+    def spherical_to_cylindrical(cls, r: torch.tensor, ang: torch.tensor) -> (
+            torch.tensor, torch.tensor):
         z = r * torch.sin(math.pi / 180 * ang)
         r_cyl = torch.sqrt(r ** 2 - z ** 2)
         return z, r_cyl
 
     @staticmethod
-    def _fixedquad(func, n=None, n_max=100, n_min=10, rel_tol=1e-6, dtype=torch.float32, device=None) -> torch.tensor:
+    def _fixedquad(func, n=None, n_max=100, n_min=10, rel_tol=1e-6,
+                   dtype=torch.float32, device=None) -> torch.tensor:
         """Integrate func from 0->1 using Gaussian quadrature of order n if set.
         Else provide answer with estimated relative error less than rel_tol (up to a
         maximum order of n_max"""
         if n is None:
-            val = old_val = fixed_quad(func, n=n_min, dtype=dtype, device=device)
+            val = old_val = fixed_quad(func, n=n_min, dtype=dtype,
+                                       device=device)
             for n in range(n_min + 5, n_max, 5):
                 val = fixed_quad(func, n=n, dtype=dtype, device=device)
                 rel_err = torch.max(torch.abs((val - old_val) / val))
@@ -157,7 +172,8 @@ class SpheroidalPotential(nn.Module):
         self.r_max, self.z_max = torch.as_tensor(r_max), torch.as_tensor(z_max)
         f_r_cyl = self.f_r_cyl(r, z.unsqueeze(-1))
         f_z = self.f_z(r, z.unsqueeze(-1))
-        self.grid = torch.stack((f_r_cyl, f_z)).unsqueeze(0)  # .permute(0,1,3,2)
+        self.grid = torch.stack((f_r_cyl, f_z)).unsqueeze(
+            0)  # .permute(0,1,3,2)
 
     def get_accelerations_cyl(self, positions):
         """Linear interpolate the gridded forces to the specified positions. This should be preceeded
@@ -166,7 +182,9 @@ class SpheroidalPotential(nn.Module):
         samples = torch.stack((2 * torch.sqrt(positions[..., 0] ** 2 + positions[..., 1] ** 2) / self.r_max - 1,
                                positions[..., 2] / self.z_max), dim=-1)
         samples = samples.unsqueeze(0).unsqueeze(2)
-        return torch.nn.functional.grid_sample(self.grid, samples, mode='bilinear', align_corners=True).squeeze().t()
+        return torch.nn.functional.grid_sample(self.grid, samples,
+                                               mode='bilinear',
+                                               align_corners=True).squeeze().t()
 
     def get_accelerations(self, positions):
         """Linear interpolate the gridded forces to the specified positions. This should be preceeded
@@ -188,7 +206,8 @@ def fit_q_slice_to_snapshot(snap):
     st = snap.z / snap.r
     mintheta = np.sin(30. / 180 * np.pi)
     masses = snap.masses.detach().cpu().numpy()
-    mass, edges = np.histogram(st ** 2, np.linspace(mintheta ** 2, 1, 100), weights=masses)
+    mass, edges = np.histogram(st ** 2, np.linspace(mintheta ** 2, 1, 100),
+                               weights=masses)
     x = 0.5 * (edges[:-1] + edges[1:])
     ctedges = 1 - np.sqrt(edges)
     vol = ctedges[:-1] - ctedges[1:]
@@ -197,11 +216,13 @@ def fit_q_slice_to_snapshot(snap):
     def f(x, a, b):
         return a * (b * x + 1)
 
-    mass2, edges = np.histogram(st ** 2, np.linspace(mintheta ** 2, 1, 100), weights=masses)
+    mass2, edges = np.histogram(st ** 2, np.linspace(mintheta ** 2, 1, 100),
+                                weights=masses)
     gd = (mass > 0)
     mass, mass2, rho, x = mass[gd], mass2[gd], rho[gd], x[gd]
     Neff = mass ** 2 / mass2
-    popt, pcov = scipy.optimize.curve_fit(f, x, rho, p0=[-0.8, 1.0], sigma=rho / np.sqrt(Neff))
+    popt, pcov = scipy.optimize.curve_fit(f, x, rho, p0=[-0.8, 1.0],
+                                          sigma=rho / np.sqrt(Neff))
     perr = np.sqrt(np.diag(pcov))
     q = 1 / np.sqrt(1 - popt[1])
     qerr = q * 0.5 * perr[1] / popt[1]
@@ -231,7 +252,8 @@ def fit_q_to_snapshot(snap, r_range=(1, 20), r_bins=10, plot=False):
     return q, qerr
 
 
-def fit_potential_to_snap(snap, rho_func, m_range=(1, 20), m_bins=50, q=None, return_p=False, *args, **kwargs):
+def fit_potential_to_snap(snap, rho_func, m_range=(1, 20), m_bins=50, q=None,
+                          return_p=False, *args, **kwargs):
     """Fit an ellipsoidal density function of the form  rho_func(m,p[0],p[1],....) to the snapshot.
     Returns pot : the best fitting potential.
     Must supply initial parameters for this fit.
@@ -240,15 +262,16 @@ def fit_potential_to_snap(snap, rho_func, m_range=(1, 20), m_bins=50, q=None, re
     Set plot=True to compare fit to the snapshot."""
     if q is None:
         q, qerr = fit_q_to_snapshot(snap, r_range=m_range, r_bins=m_bins)
-    popt, perr = fit_spheroidal_function_to_snap(snap, rho_func, q=q, *args, **kwargs)
+    popt, perr = fit_spheroidal_function_to_snap(snap, rho_func, q=q, *args,
+                                                 **kwargs)
     if return_p:
         return SpheroidalPotential(lambda m: rho_func(m, *popt), q=q), popt
     else:
         return SpheroidalPotential(lambda m: rho_func(m, *popt), q=q)
 
 
-
-def fit_spheroidal_function_to_snap(snap, rho_func, init_parms, m_range=(1, 20), m_bins=50, q=None, plot=False):
+def fit_spheroidal_function_to_snap(snap, rho_func, init_parms, m_range=(1, 20),
+                                    m_bins=50, q=None, plot=False):
     """Fit an ellipsoidal density function of the form  rho_func(m,p[0],p[1],....) to the snapshot.
     Returns p, perr : the best fitting parameters of rho_func and their errors.
     Must supply initial parameters for this fit.
@@ -269,8 +292,12 @@ def fit_spheroidal_function_to_snap(snap, rho_func, init_parms, m_range=(1, 20),
 
     (mass2, medge) = np.histogram(m, m_bins, weights=masses)
     Neff = mass ** 2 / mass2
-    rho_numpy = lambda x, *args, **kwargs: rho_func(x, *args, **kwargs).cpu().numpy()
-    popt, pcov = scipy.optimize.curve_fit(rho_numpy, mmid, rho, p0=init_parms, sigma=rho / np.sqrt(Neff))
+
+    def rho_numpy(x, *args, **kwargs):
+        return rho_func(x, *args, **kwargs).cpu().numpy()
+
+    popt, pcov = scipy.optimize.curve_fit(rho_numpy, mmid, rho, p0=init_parms,
+                                          sigma=rho / np.sqrt(Neff))
     perr = np.sqrt(np.diag(pcov))
     if plot:
         f, ax = plt.subplots()

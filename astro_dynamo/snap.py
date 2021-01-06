@@ -1,8 +1,11 @@
 import math
+
+import numpy as np
 import torch
 import torch.nn as nn
 
 import astro_dynamo.nemo
+
 
 class SnapShot(nn.Module):
     def __init__(self, positions=None, velocities=None,
@@ -12,14 +15,15 @@ class SnapShot(nn.Module):
         # Masses are registered as parameters i.e. something for pytorch to optimise
         # positions, velocities and everything else are buffers i.e. they are the internal state of the model, but
         # shouldn't be optimised
-        self.logmassoffset = (masses.sum()/len(masses)).log().detach()
-        self.logmasses = nn.Parameter(masses.log()-self.logmassoffset)
+        self.logmassoffset = (masses.sum() / len(masses)).log().detach()
+        self.logmasses = nn.Parameter(masses.log() - self.logmassoffset)
         self.register_buffer('positions', torch.as_tensor(positions))
         self.register_buffer('velocities', torch.as_tensor(velocities))
         self.register_buffer('time', torch.as_tensor(time))
         self.register_buffer('omega', torch.as_tensor(omega))
         if dt is None:
-            dt = torch.full(self.logmasses.shape, float('inf'), dtype=self.positions.dtype,
+            dt = torch.full(self.logmasses.shape, float('inf'),
+                            dtype=self.positions.dtype,
                             device=self.logmasses.device)
 
         self.register_buffer('dt', torch.as_tensor(dt))
@@ -29,7 +33,7 @@ class SnapShot(nn.Module):
     @property
     def masses(self):
         """Targets should only ever use masses so they get dropout applied."""
-        return self.dropout((self.logmasses+self.logmassoffset).exp())
+        return self.dropout((self.logmasses + self.logmassoffset).exp())
 
     def extra_repr(self):
         return f'n_particles={self.n} omega={self.omega}'
@@ -41,7 +45,8 @@ class SnapShot(nn.Module):
     def as_numpy_array(self):
         """Returns as a nmagic type matrix of dimension [:,7] with positions at [:,1:4], velocities at [:,4:7] and
         masses at [:,7]"""
-        matrix = torch.cat((self.positions, self.velocities, self.masses.detach().unsqueeze(dim=1)), dim=1)
+        matrix = torch.cat((self.positions, self.velocities,
+                            self.masses.detach().unsqueeze(dim=1)), dim=1)
         return matrix.to(torch.device('cpu')).numpy()
 
     @property
@@ -96,7 +101,8 @@ class SnapShot(nn.Module):
             newsnap.dt = self.dt[i]
         return newsnap
 
-    def integrate(self, time, potentials, minsteps=1, maxsteps=2 ** 20, stepsperorbit=800, verbose=False):
+    def integrate(self, time, potentials, minsteps=1, maxsteps=2 ** 20,
+                  stepsperorbit=800, verbose=False):
         """"
         Integrate the snapshot until time. Use a minimum timestep of mindt (default 1e-6) and aim for
         stepsperorbit (default 800) steps per orbit.
@@ -131,9 +137,12 @@ class SnapShot(nn.Module):
                 self.dt = time.clone()
 
         # Given each particles dt then compute the optimal number of steps rounded up to the nearest 2**N
-        steps = 2 ** (((time - initial_time) / self.dt).abs().log2().ceil()).clamp(min=0).type(torch.int32)
+        steps = 2 ** (
+            ((time - initial_time) / self.dt).abs().log2().ceil()).clamp(
+            min=0).type(torch.int32)
         # maxsteps = 2 ** (((time - initial_time) / mindt).abs().log2().ceil()).clamp(min=0).type(torch.int32)
-        steps = steps.clamp(minsteps, maxsteps)  # dont exceed mindt stepsize, and make at least 1 step
+        steps = steps.clamp(minsteps,
+                            maxsteps)  # dont exceed mindt stepsize, and make at least 1 step
 
         if not blockstep:
             steps.masked_fill_(time == initial_time, 0)
@@ -152,20 +161,25 @@ class SnapShot(nn.Module):
                     thisdt = (time[i] - initial_time) / thissteps
 
                 if verbose:
-                    print(f'Steps: {thissteps} (of max {maxsteps}) with {i.sum()} particles')
+                    print(
+                        f'Steps: {thissteps} (of max {maxsteps}) with {i.sum()} particles')
 
                 positions += velocities * thisdt[:, None] * 0.5
                 timenow = initial_time + thisdt * 0.5
                 for step in range(thissteps):
                     # Get accelerations in from corotating frame
-                    accelerations = self.get_accelerations(potentials, self.corotating_frame(self.omega, timenow -
-                                                                                             initial_time, positions))
-                    self.corotating_frame(-self.omega, timenow - initial_time, accelerations,
+                    accelerations = self.get_accelerations(potentials,
+                                                           self.corotating_frame(
+                                                               self.omega,
+                                                               timenow -
+                                                               initial_time,
+                                                               positions))
+                    self.corotating_frame(-self.omega, timenow - initial_time,
+                                          accelerations,
                                           inplace=True)  # Move accelerations to inertial frame
                     velocities += accelerations * thisdt[:, None]
                     tau = 2 * math.pi * (
-                            (positions.norm(dim=-1) + 1e-3) / (
-                            accelerations.norm(dim=-1) + 1e-5)).sqrt() / stepsperorbit
+                            (positions.norm(dim=-1) + 1e-3) / (accelerations.norm(dim=-1) + 1e-5)).sqrt() / stepsperorbit
                     dt = torch.min(dt, tau)
                     positions += velocities * thisdt[:, None]
                     timenow += thisdt
@@ -183,7 +197,8 @@ class SnapShot(nn.Module):
 
             thissteps *= 2
 
-        self.corotating_frame(self.omega, time - initial_time, self.positions, self.velocities, inplace=True)
+        self.corotating_frame(self.omega, time - initial_time, self.positions,
+                              self.velocities, inplace=True)
 
         if blockstep:
             self.time = time
@@ -208,7 +223,8 @@ class SnapShot(nn.Module):
                 pass
         return ingrid
 
-    def leapfrog_steps(self, potentials, steps, stepsperorbit=800, verbose=False, return_time=False):
+    def leapfrog_steps(self, potentials, steps, stepsperorbit=800,
+                       verbose=False, return_time=False):
         """"
         Integrate the snapshot for a set number of timesteps. Because the timestep is so there are stepsperorbit steps
         for each orbit (roughly) then this corresponds to integrating for roughly steps/stepsperorbit orbits.
@@ -225,9 +241,9 @@ class SnapShot(nn.Module):
 
         baddt = (self.dt == float("Inf"))
         if baddt.sum() > 0:
-            accelerations = self.get_accelerations(potentials, self.positions[baddt, :])
-            self.dt[baddt] = 2 * math.pi * (
-                    (self.positions[baddt, :].norm(dim=-1) + 1e-3) / (
+            accelerations = self.get_accelerations(potentials,
+                                                   self.positions[baddt, :])
+            self.dt[baddt] = 2 * math.pi * ((self.positions[baddt, :].norm(dim=-1) + 1e-3) / (
                     accelerations.norm(dim=-1) + 1e-5)).sqrt() / stepsperorbit
 
         self.positions += self.velocities * self.dt[:, None] * 0.5
@@ -236,7 +252,9 @@ class SnapShot(nn.Module):
         for step in range(steps):
             # Get accelerations in from corotating frame
             accelerations = self.get_accelerations(potentials,
-                                                   self.corotating_frame(self.omega, timenow, self.positions))
+                                                   self.corotating_frame(
+                                                       self.omega, timenow,
+                                                       self.positions))
             self.corotating_frame(-self.omega, timenow, accelerations,
                                   inplace=True)  # Move accelerations to inertial frame
             self.velocities += accelerations * self.dt[:, None]
@@ -244,14 +262,16 @@ class SnapShot(nn.Module):
             timenow += self.dt
 
         if verbose:
-            print(f'Bad: {idx_bad.sum()} Total Bad seen: {bad.sum()}')
+            print(f'Total Bad seen: {bad.sum()}')
         self.positions -= self.velocities * self.dt[:, None] * 0.5
-        self.corotating_frame(self.omega, timenow, self.positions, self.velocities, inplace=True)
+        self.corotating_frame(self.omega, timenow, self.positions,
+                              self.velocities, inplace=True)
         if return_time:
             return timenow
 
     @classmethod
-    def rotate_snap(cls, angle, positions, velocities=None, inplace=False, deg=False):
+    def rotate_snap(cls, angle, positions, velocities=None, inplace=False,
+                    deg=False):
         """Rotates the bar by angle about the z-axis.
         Returns positions, velocities in the corotating frame. Optionally updates the positions and velocities
         inplace"""
@@ -262,12 +282,14 @@ class SnapShot(nn.Module):
             corotating_positions[..., 2] = positions[..., 2]
 
         # Idea is to make the 2x2 rotation matrix and apply to the x-y plane for positions/velocities
-        angle = torch.as_tensor(angle, device=positions.device, dtype=positions.dtype)
+        angle = torch.as_tensor(angle, device=positions.device,
+                                dtype=positions.dtype)
         if deg:
             angle *= math.pi / 180.
         cp, sp = torch.cos(angle), torch.sin(angle)
-        corotating_positions[..., 0:2] = torch.stack((cp * positions[..., 0] - sp * positions[..., 1],
-                                                      sp * positions[..., 0] + cp * positions[..., 1]), dim=-1)
+        corotating_positions[..., 0:2] = torch.stack(
+            (cp * positions[..., 0] - sp * positions[..., 1],
+             sp * positions[..., 0] + cp * positions[..., 1]), dim=-1)
         if velocities is None:
             return corotating_positions
         else:
@@ -276,16 +298,19 @@ class SnapShot(nn.Module):
             else:
                 corotating_velocities = torch.zeros_like(velocities)
                 corotating_velocities[..., 2] = velocities[..., 2]
-            corotating_velocities[..., 0:2] = torch.stack((cp * velocities[..., 0] - sp * velocities[..., 1],
-                                                           sp * velocities[..., 0] + cp * velocities[..., 1]), dim=-1)
+            corotating_velocities[..., 0:2] = torch.stack(
+                (cp * velocities[..., 0] - sp * velocities[..., 1],
+                 sp * velocities[..., 0] + cp * velocities[..., 1]), dim=-1)
 
             return corotating_positions, corotating_velocities
 
     @classmethod
-    def corotating_frame(cls, omega, time, positions, velocities=None, inplace=False):
+    def corotating_frame(cls, omega, time, positions, velocities=None,
+                         inplace=False):
         """Uses the time to rotate positions (and optionally velocities) from the rotating to the corotating frame.
         Returns positions, velocities in the corotating frame. Optionally updates the positions and velocities inplace"""
-        return cls.rotate_snap(omega * time, positions, velocities=velocities, inplace=inplace)
+        return cls.rotate_snap(omega * time, positions, velocities=velocities,
+                               inplace=inplace)
 
     def resample(self, potentials, verbose=False, velocity_perturbation=0.01):
         """Resamples the model, splitting the particles randomly proportional to mass. For particles with more than
@@ -296,45 +321,63 @@ class SnapShot(nn.Module):
 
         # resample and copy the resampled particles properties - the first copy of each particle is the parent particle
         # and will remain unchanged
-        i = torch.multinomial(self.masses[gd], self.n, replacement=True).sort().values
+        i = torch.multinomial(self.masses[gd], self.n,
+                              replacement=True).sort().values
         new_positions = self.positions[gd[i], :]
         new_velocities = self.velocities[gd[i], :]
-        new_masses = torch.full_like(self.masses, self.masses[gd].sum().item() / self.n)
+        new_masses = torch.full_like(self.masses,
+                                     self.masses[gd].sum().item() / self.n)
         new_dt = self.dt[gd[i]]
-        new_snap = SnapShot(positions=new_positions, velocities=new_velocities, masses=new_masses,
+        new_snap = SnapShot(positions=new_positions, velocities=new_velocities,
+                            masses=new_masses,
                             time=self.time, omega=self.omega, dt=new_dt)
 
-        accelerations = new_snap.get_accelerations(potentials, new_snap.positions)
-        tau = 4 * math.pi * ((new_snap.positions.norm(dim=-1) + 1e-3) / (accelerations.norm(dim=-1) + 1e-5)).sqrt()
+        accelerations = new_snap.get_accelerations(potentials,
+                                                   new_snap.positions)
+        tau = 4 * math.pi * ((new_snap.positions.norm(dim=-1) + 1e-3) / (
+                accelerations.norm(dim=-1) + 1e-5)).sqrt()
         # compute the sample time for each child particle
         sample_time = torch.zeros_like(new_snap.masses)
-        uniq_i, inverse_indices, counts = torch.unique_consecutive(i, return_counts=True, return_inverse=True)
+        uniq_i, inverse_indices, counts = torch.unique_consecutive(i,
+                                                                   return_counts=True,
+                                                                   return_inverse=True)
         for n_children in range(2, counts.max() + 1):
             number_of_n_children = (counts == n_children).sum()
             if number_of_n_children > 0:
                 if verbose:
-                    print('n_children', n_children, 'number_of_n_children:', number_of_n_children)
-                sample_time[(counts[inverse_indices] == n_children).nonzero()[:, 0]] = torch.arange(n_children,
-                                                                                                    dtype=sample_time.dtype,
-                                                                                                    device=sample_time.device).repeat(
+                    print('n_children', n_children, 'number_of_n_children:',
+                          number_of_n_children)
+                sample_time[(counts[inverse_indices] == n_children).nonzero()[:,
+                            0]] = torch.arange(n_children,
+                                               dtype=sample_time.dtype,
+                                               device=sample_time.device).repeat(
                     number_of_n_children) / n_children
         sample_time *= tau
-        new_snap.integrate(sample_time, potentials, minsteps=1024, maxsteps=8192, verbose=verbose)
+        new_snap.integrate(sample_time, potentials, minsteps=1024,
+                           maxsteps=8192, verbose=verbose)
 
         # perturb the velocities of the children in the rotating frame
         children = (sample_time > 0)
-        new_snap.velocities[children, 0] += velocity_perturbation * torch.randn_like(
-            new_snap.velocities[children, 0]) * (new_snap.velocities[children, 0] - new_snap.omega *
-                                                 new_snap.positions[children, 1])
-        new_snap.velocities[children, 1] += velocity_perturbation * torch.randn_like(
-            new_snap.velocities[children, 1]) * (new_snap.velocities[children, 1] + new_snap.omega *
-                                                 new_snap.positions[children, 0])
-        new_snap.velocities[children, 2] += velocity_perturbation * torch.randn_like(new_snap.velocities[children, 2]) * \
-                                            new_snap.velocities[children, 2]
+        new_snap.velocities[
+            children, 0] += velocity_perturbation * torch.randn_like(
+            new_snap.velocities[children, 0]) * (new_snap.velocities[
+                                                     children, 0] - new_snap.omega *
+                                                 new_snap.positions[
+                                                     children, 1])
+        new_snap.velocities[
+            children, 1] += velocity_perturbation * torch.randn_like(
+            new_snap.velocities[children, 1]) * (new_snap.velocities[
+                                                     children, 1] + new_snap.omega *
+                                                 new_snap.positions[
+                                                     children, 0])
+        new_snap.velocities[
+            children, 2] += velocity_perturbation * torch.randn_like(
+            new_snap.velocities[children, 2]) * new_snap.velocities[children, 2]
         return new_snap
 
 
-def read_nemo_snapshot(filename, time=1000, groups=(range(0, 500000),range(500000, 1000000)),
+def read_nemo_snapshot(filename, time=1000,
+                       groups=(range(0, 500000), range(500000, 1000000)),
                        dtype=torch.float, device=None, flip=True):
     """Loads a nemo snapshot at time into a astro_dynamo snapshot.
     Returns a tuple of snaps, each element corresponds to the indices of the particles sepcified as the ranges
@@ -342,9 +385,13 @@ def read_nemo_snapshot(filename, time=1000, groups=(range(0, 500000),range(50000
     _, snap = astro_dynamo.nemo.readsnap(filename, times=time)
     snaps = []
     for group in groups:
-        snaps += [SnapShot(positions=torch.as_tensor(snap[0, group, 0:3], dtype=dtype, device=device),
-                           velocities=torch.as_tensor(snap[0, group, 3:6], dtype=dtype, device=device),
-                           masses=torch.as_tensor(snap[0, group, 6], dtype=dtype, device=device))]
+        snaps += [SnapShot(
+            positions=torch.as_tensor(snap[0, group, 0:3], dtype=dtype,
+                                      device=device),
+            velocities=torch.as_tensor(snap[0, group, 3:6], dtype=dtype,
+                                       device=device),
+            masses=torch.as_tensor(snap[0, group, 6], dtype=dtype,
+                                   device=device))]
     if flip:
         for snap in snaps:
             snap.velocities = -snap.velocities
@@ -352,7 +399,8 @@ def read_nemo_snapshot(filename, time=1000, groups=(range(0, 500000),range(50000
     return tuple(snaps)
 
 
-def read_ascii_snapshot(filename, particle_types=None, dtype=torch.float, device=None):
+def read_ascii_snapshot(filename, particle_types=None, dtype=torch.float,
+                        device=None):
     """Loads a nemo snapshot at time into a astro_dynamo snapshot.
     Requires the number of stars to be specified. These are assumed to be the first particles. """
     snap = np.loadtxt(filename)
@@ -363,9 +411,13 @@ def read_ascii_snapshot(filename, particle_types=None, dtype=torch.float, device
     for particle_type in particle_types:
         i = (snap[:, 7] == particle_type)
         if i.sum() > 0:
-            snap = SnapShot(positions=torch.as_tensor(snap[i, 0:3], dtype=dtype, device=device),
-                            velocities=torch.as_tensor(snap[i, 3:6], dtype=dtype, device=device),
-                            masses=torch.as_tensor(snap[i, 6], dtype=dtype, device=device))
+            snap = SnapShot(positions=torch.as_tensor(snap[i, 0:3], dtype=dtype,
+                                                      device=device),
+                            velocities=torch.as_tensor(snap[i, 3:6],
+                                                       dtype=dtype,
+                                                       device=device),
+                            masses=torch.as_tensor(snap[i, 6], dtype=dtype,
+                                                   device=device))
         else:
             snap = None
         snaps += [snap]
@@ -377,8 +429,14 @@ def symmetrize_snap(snap, axis=2):
     We do this by doubling the snap shot, with the send set of particles being copies under
     positions[:,axis] -> -positions[:,axis] and velocities[:,axis] -> -velocities[:,axis] """
     new_positions = torch.cat((snap.positions, snap.positions), dim=0)
-    new_positions[new_positions.shape[0] // 2:, axis] = -new_positions[new_positions.shape[0] // 2:, axis]
+    new_positions[new_positions.shape[0] // 2:, axis] = -new_positions[
+                                                         new_positions.shape[
+                                                             0] // 2:, axis]
     new_velocities = torch.cat((snap.velocities, snap.velocities), dim=0)
-    new_velocities[new_velocities.shape[0] // 2:, axis] = -new_velocities[new_velocities.shape[0] // 2:, axis]
-    new_masses = torch.cat((snap.masses.detach() / 2, snap.masses.detach() / 2), dim=0)
-    return SnapShot(positions=new_positions, velocities=new_velocities, masses=new_masses)
+    new_velocities[new_velocities.shape[0] // 2:, axis] = -new_velocities[
+                                                           new_velocities.shape[
+                                                               0] // 2:, axis]
+    new_masses = torch.cat((snap.masses.detach() / 2, snap.masses.detach() / 2),
+                           dim=0)
+    return SnapShot(positions=new_positions, velocities=new_velocities,
+                    masses=new_masses)

@@ -31,7 +31,8 @@ class PowerLawIMF(IMF):
 
         The default corresponds to a Kroupa (2001) IMF."""
         if len(mass_breaks) + 1 != len(power_law_indicies):
-            raise ValueError("power_law_indicies should be 1 element longer than breaks")
+            raise ValueError(
+                "power_law_indicies should be 1 element longer than breaks")
 
         self.mass_breaks = mass_breaks
         self.power_law_indicies = power_law_indicies
@@ -39,7 +40,8 @@ class PowerLawIMF(IMF):
         # first compute the normalisations we need to ensure continuity at each break
         normalisations = [1.0]
         for i, mass_break in enumerate(self.mass_breaks):
-            normalisations += [normalisations[i] * mass_break ** (power_law_indicies[i] - power_law_indicies[i + 1])]
+            normalisations += [normalisations[i] * mass_break ** (
+                        power_law_indicies[i] - power_law_indicies[i + 1])]
         self.normalisations = np.asarray(normalisations)
 
         # then ensure that we the normalisation means that we have 1Msun in total
@@ -51,33 +53,42 @@ class PowerLawIMF(IMF):
         out = np.zeros_like(mass)
         for break_index, (normalisation, power_law_index) in enumerate(
                 zip(self.normalisations, self.power_law_indicies)):
-            m_min = (self.mass_breaks[break_index - 1] if break_index != 0 else 0.)
-            m_max = (self.mass_breaks[break_index] if break_index < len(self.mass_breaks) else np.inf)
+            m_min = (
+                self.mass_breaks[break_index - 1] if break_index != 0 else 0.)
+            m_max = (self.mass_breaks[break_index] if break_index < len(
+                self.mass_breaks) else np.inf)
             out_indx = (mass >= m_min) & (mass < m_max)
             out[out_indx] = normalisation * mass[out_indx] ** power_law_index
         return out
 
     def _integral(self, mass: Union[float, np.array], mass_power=0) -> np.array:
-        """Helper function that returns \int phi(m)*m**mass_power dm so that the same code can be used
-        with mass_power = 0 for number integral  and mass_power = 1 for mass integral"""
+        """Helper function that returns \\int phi(m)*m**mass_power dm so that
+        the same code can be used with mass_power = 0 for number integral
+        and mass_power = 1 for mass integral"""
         mass = np.asarray(mass)
         integral = np.zeros_like(mass)
         for break_index, (normalisation, power_law_index) in enumerate(
                 zip(self.normalisations, self.power_law_indicies)):
-            m_min = (self.mass_breaks[break_index - 1] if break_index != 0 else 0.)
-            m_max = (self.mass_breaks[break_index] if break_index < len(self.mass_breaks) else np.inf)
+            m_min = (
+                self.mass_breaks[break_index - 1] if break_index != 0 else 0.)
+            m_max = (self.mass_breaks[break_index] if break_index < len(
+                self.mass_breaks) else np.inf)
             out_indx = (mass >= m_max)
             exponent = power_law_index + mass_power + 1
             if exponent != 0.:
-                integral[out_indx] += normalisation * (m_max ** exponent - m_min ** exponent) / exponent
+                integral[out_indx] += normalisation * (
+                            m_max ** exponent - m_min ** exponent) / exponent
             else:
-                integral[out_indx] += normalisation * (np.log(m_max) - np.log(m_min))
+                integral[out_indx] += normalisation * (
+                            np.log(m_max) - np.log(m_min))
 
             out_indx = (mass >= m_min) & (mass < m_max)
             if exponent != 0.:
-                integral[out_indx] += normalisation * (mass[out_indx] ** exponent - m_min ** exponent) / exponent
+                integral[out_indx] += normalisation * (mass[
+                                                           out_indx] ** exponent - m_min ** exponent) / exponent
             else:
-                integral[out_indx] += normalisation * (np.log(mass[out_indx]) - np.log(m_min))
+                integral[out_indx] += normalisation * (
+                            np.log(mass[out_indx]) - np.log(m_min))
         return integral
 
     def number_integral(self, mass: Union[float, np.array]) -> np.array:

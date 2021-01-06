@@ -13,7 +13,7 @@ checkout the astro_dynamo_example.ipynb notebook"""
 class SurfaceDensity(nn.Module):
     def __init__(self,
                  r_range: Union[List[float], Tuple[float], torch.Tensor] = (
-                 0., 10.),
+                         0., 10.),
                  r_bins: int = 20,
                  physical: bool = False):
         """
@@ -75,8 +75,7 @@ class SurfaceDensity(nn.Module):
                                                                  device=self.area.device,
                                                                  dtype=self.area.dtype)
 
-    def evalulate_function(self, surface_density: Callable[
-        [torch.Tensor], torch.Tensor]) -> torch.Tensor:
+    def evalulate_function(self, surface_density: Callable[[torch.Tensor], torch.Tensor]) -> torch.Tensor:
         """
         Compute the surface density observables
         Args:
@@ -92,10 +91,10 @@ class SurfaceDensity(nn.Module):
 class DoubleExponentialDisk(nn.Module):
     def __init__(self,
                  r_range: Union[List[float], Tuple[float], torch.Tensor] = (
-                 0., 10.),
+                         0., 10.),
                  r_bins: int = 20,
                  z_range: Union[List[float], Tuple[float], torch.Tensor] = (
-                 -2., 2.),
+                         -2., 2.),
                  z_bins: int = 20,
                  physical: bool = False):
         """
@@ -167,8 +166,7 @@ class DoubleExponentialDisk(nn.Module):
                                                                  device=self.area.device,
                                                                  dtype=self.area.dtype)
 
-    def evalulate_function(self, disk_density: Callable[
-        [torch.Tensor, torch.Tensor], torch.Tensor]) -> torch.Tensor:
+    def evalulate_function(self, disk_density: Callable[[torch.Tensor, torch.Tensor], torch.Tensor]) -> torch.Tensor:
         """
         Compute the surface density observables
         Args:
@@ -198,18 +196,15 @@ class DiskKinematics(SurfaceDensity):
         masses = snap.masses[gd]
         i = i[gd].unsqueeze(0)
 
-        v_r_cyl = (snap.positions[:, 0] * snap.velocities[:,
-                                          0] + snap.positions[:,
-                                               1] * snap.velocities[:,
-                                                    1]) / r_cyl
-        v_phi = (snap.positions[:, 1] * snap.velocities[:, 0] - snap.positions[
-                                                                :,
-                                                                0] * snap.velocities[
-                                                                     :,
-                                                                     1]) / r_cyl
+        v_r_cyl = (snap.positions[:, 0] * snap.velocities[:, 0] +
+                   snap.positions[:, 1] * snap.velocities[:, 1]) / r_cyl
+        v_phi = (snap.positions[:, 1] * snap.velocities[:, 0] -
+                 snap.positions[:, 0] * snap.velocities[:, 1]) / r_cyl
 
-        in_bin = lambda x: torch.sparse.FloatTensor(i, masses * x, size=(
-        self.r_bins,)).to_dense()
+        def in_bin(x):
+            return torch.sparse.FloatTensor(i, masses * x,
+                                            size=(self.r_bins,)).to_dense()
+
         hist_mass = in_bin(1)
         hist_vr = in_bin(v_r_cyl[gd]) / hist_mass
         hist_vr2 = in_bin(v_r_cyl[gd] ** 2) / hist_mass
