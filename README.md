@@ -2,7 +2,7 @@
 
 astro-dynamo applies machine learning methods to adapt an N-body model to your needs.
 An example notebook showing how to use it can be found on google colab
-[here](https://colab.research.google.com/drive/1oFQdm0V3KfxtbmtoEwsG_KGeehdsjdDc).
+[here](https://github.com/cwegg/astro-dynamo/blob/master/astro_dynamo_example.ipynb).
 
 The primary usage envisioned is adapting an N-body model to fit data, or create
 tailored initial conditions. 
