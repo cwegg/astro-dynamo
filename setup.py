@@ -9,5 +9,5 @@ setup(name='astro_dynamo',
       author_email='chriswegg+astrodynamo@gmail.com',
       url='https://gitlab.com/chriswegg/astro-dynamo',
       packages=find_packages(),
-      install_requires=['torch', 'numpy']
+      install_requires=['torch', 'numpy', 'matplotlib', 'scipy']
       )

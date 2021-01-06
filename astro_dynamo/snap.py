@@ -1,9 +1,8 @@
 import math
-
-import astro_dynamo.nemo
 import torch
 import torch.nn as nn
 
+import astro_dynamo.nemo
 
 class SnapShot(nn.Module):
     def __init__(self, positions=None, velocities=None,
@@ -262,7 +261,7 @@ class SnapShot(nn.Module):
             corotating_positions = torch.zeros_like(positions)
             corotating_positions[..., 2] = positions[..., 2]
 
-        # Idea is to make the 2x2 rotation matrix R and apply to the x-y plane for positions/velocities
+        # Idea is to make the 2x2 rotation matrix and apply to the x-y plane for positions/velocities
         angle = torch.as_tensor(angle, device=positions.device, dtype=positions.dtype)
         if deg:
             angle *= math.pi / 180.

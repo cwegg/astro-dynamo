@@ -1,8 +1,10 @@
 import math
-
 import numpy as np
 import torch
 
+"""This file contains a few tools as functions that others might be useful when 
+analysing  snapshots. It less well tested or clean than the rest of 
+astrodynamo."""
 
 def patternspeed(snap, rrange=(1, 4), n=range(2, 12, 2), combine=True, plot=None):
     """Compute the pattern speed of a snapshot. Uses continuity equation in cylindrical coordinates. Integrating over

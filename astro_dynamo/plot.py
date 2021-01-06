@@ -35,9 +35,9 @@ def plot_snap_projections(model: Union[astro_dynamo.model.DynamicalModel, astro_
     else:
         f = axs.flatten()[0].figure
 
-    x = snap.x.cpu() * d_scale
-    y = snap.y.cpu() * d_scale
-    z = snap.z.cpu() * d_scale
+    x = snap.x.cpu() * d_scale.cpu()
+    y = snap.y.cpu() * d_scale.cpu()
+    z = snap.z.cpu() * d_scale.cpu()
     m = snap.masses.detach().cpu()
 
     projections = ((x, y), (y, z), (x, z))

@@ -5,7 +5,7 @@ import torch
 import torch.nn as nn
 from astro_dynamo.snap import SnapShot
 
-from .analysesnap import align_bar
+from .snaptools import align_bar
 
 _symmetrize_matrix = lambda x, dim: (x + x.flip(dims=[dim])) / 2
 
