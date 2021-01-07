@@ -26,7 +26,7 @@ jobs:
         sudo apt-get install -q csh
         wget -q https://teuben.github.io/nemo/install_nemo
         chmod +x install_nemo
-        ./install_nemo nemo=/nemo > nemo_install.stdout
+        sudo ./install_nemo nemo=/nemo > nemo_install.stdout
         echo "NEMO_LOCATION=/nemo" >> $GITHUB_ENV
     - name: Lint with flake8
       run: |
