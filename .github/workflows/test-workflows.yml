@@ -6,7 +6,7 @@ jobs:
   build:
     defaults:
       run:
-        working-directory: ./astro-dynamo   # job level working directory
+        working-directory: ./astro-dynamo/astro-dynamo   # job level working directory
 
     runs-on: ubuntu-latest
     strategy:
