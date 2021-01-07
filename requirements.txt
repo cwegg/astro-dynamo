@@ -4,4 +4,6 @@ torch
 numpy
 tqdm
 pandas
+dvc # for checking out initial models
 galpy # for tests only
+pytest # for tests only
