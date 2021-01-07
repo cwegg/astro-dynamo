@@ -1,0 +1,7 @@
+matplotlib
+scipy
+torch
+numpy
+tqdm
+pandas
+galpy # for tests only
