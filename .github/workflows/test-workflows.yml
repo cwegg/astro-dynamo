@@ -35,6 +35,9 @@ jobs:
         ls
         pwd
         pip install .
+    - name: Get test resources
+      run: |
+        dvc pull -q data/parsec_isochrones_gaia_2mass.dat
     - name: Prepare to install nemo nemo install script
       run: |
         sudo apt-get install -q csh
