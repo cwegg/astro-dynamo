@@ -1,3 +1,5 @@
+import os
+
 import numpy as np
 import pytest
 
@@ -6,7 +8,8 @@ import astro_dynamo.luminosityfunction
 
 
 @pytest.fixture(scope="module")
-def lf_from_isochrones():
+def lf_from_isochrones(request):
+    os.chdir(request.fspath.dirname)
     lf_obj = astro_dynamo.luminosityfunction.ParsecLuminosityFunction(
         isochrone_file='../../data/parsec_isochrones_gaia_2mass.dat',
         mag_range=(-20, 20), d_mag=0.2)
