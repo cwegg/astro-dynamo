@@ -4,6 +4,9 @@ on: [push]
 
 jobs:
   build:
+    defaults:
+      run:
+        working-directory: ./astro-dynamo   # job level working directory
 
     runs-on: ubuntu-latest
     strategy:
@@ -21,13 +24,22 @@ jobs:
         python -m pip install --upgrade pip
         pip install flake8 pytest
         if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
-    - name: Install nemo
+        pip install .
+    - name: Prepare to install nemo nemo install script
       run: |
         sudo apt-get install -q csh
         wget -q https://teuben.github.io/nemo/install_nemo
         chmod +x install_nemo
-        sudo ./install_nemo nemo=/nemo > nemo_install.stdout
         echo "NEMO_LOCATION=/nemo" >> $GITHUB_ENV
+    - uses: actions/cache@v2
+      with:
+        path: $NEMO_LOCATION
+        key: ${{ runner.os }}-nemo-${{ hashFiles('install_nemo') }}
+        restore-keys: |
+          ${{ runner.os }}-nemo-
+    - name: Install nemo
+      run: |
+        sudo ./install_nemo nemo=$NEMO_LOCATION > nemo_install.stdout
     - name: Lint with flake8
       run: |
         # stop the build if there are Python syntax errors or undefined names
