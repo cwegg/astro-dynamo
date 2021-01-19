@@ -26,9 +26,10 @@ using the GPU gives a big speed-up over the CPU.
 Installation is just the usual `python setup.py install` or `pip install
  .` from the repository top level.
 
-Although not required, you may like to also install (nemo)[https://github.com/teuben/nemo]. This is needed
- for reading the input N-body files in the examples. To install to
-  `[your_location]` simply run
+Although not required, you may like to also install 
+[nemo](https://github.com/teuben/nemo). This is needed
+ for reading the input N-body files in the examples. Installation takes ~5
+  minutes on a modern computer. To install to `[your_location]` run
  ```bash
 wget -q https://teuben.github.io/nemo/install_nemo
 chmod +x install_nemo
